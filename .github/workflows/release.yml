@@ -41,7 +41,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: .
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
@@ -70,7 +70,8 @@ jobs:
       - name: Generate SHA256 checksums
         shell: pwsh
         run: |
-          $artifacts = Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -Include *.msi, *.exe
+          $bundleRoots = @('target/release/bundle', 'src-tauri/target/release/bundle') | Where-Object { Test-Path $_ }
+          $artifacts = $bundleRoots | ForEach-Object { Get-ChildItem -Path $_ -Recurse -Include *.msi, *.exe }
           $artifacts | ForEach-Object {
             $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash
             "$hash  $($_.Name)" | Out-File -Append -FilePath checksums.txt -Encoding ascii

@@ -8,6 +8,7 @@ use rusqlite::{params, OptionalExtension};
 use tauri::{AppHandle, State};
 
 use crate::{
+    commands::engines::read_default_engine,
     db,
     ocr::{
         pdf_pipeline::{self, DocumentRecord, PipelineError},
@@ -22,23 +23,34 @@ pub async fn process_pdf(
     app: AppHandle,
     state: State<'_, AppState>,
     input_path: String,
+    engine_id: Option<String>,
 ) -> Result<DocumentRecord, String> {
     let state = state.inner().clone();
     let input_path = canonical_pdf_path(&input_path).map_err(|error| error.to_string())?;
     let sha256 = pdf_pipeline::compute_sha256(&input_path).map_err(|error| error.to_string())?;
-    let output_dir = pdf_pipeline::resolve_output_dir(&state.db_path).map_err(|error| error.to_string())?;
+    let output_dir =
+        pdf_pipeline::resolve_output_dir(&state.db_path).map_err(|error| error.to_string())?;
     let (document_id, job_id) = create_queued_job(&state.db_path, &input_path, &sha256)
         .map_err(|error| error.to_string())?;
 
     set_job_running(&state.db_path, job_id).map_err(|error| error.to_string())?;
 
-    let engine: Arc<dyn OcrAdapter> = Arc::new(
-        TesseractAdapter::new(app.clone()).map_err(|error| {
-            let message = error.to_string();
+    let requested_engine = match engine_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(engine_id) => engine_id.to_string(),
+        None => read_default_engine(&state.db_path).map_err(|error| error.to_string())?,
+    };
+
+    let engine = match build_ocr_adapter(&app, &requested_engine).await {
+        Ok(engine) => engine,
+        Err(message) => {
             let _ = fail_job_and_document(&state.db_path, job_id, document_id, "error", &message);
-            message
-        })?,
-    );
+            return Err(message);
+        }
+    };
 
     match pdf_pipeline::process_pdf(
         app,
@@ -62,10 +74,47 @@ pub async fn process_pdf(
                 "error"
             };
             let message = error.to_string();
-            let _ = fail_job_and_document(&state.db_path, job_id, document_id, document_status, &message);
+            let _ = fail_job_and_document(
+                &state.db_path,
+                job_id,
+                document_id,
+                document_status,
+                &message,
+            );
             Err(message)
         }
     }
+}
+
+async fn build_ocr_adapter(
+    app: &AppHandle,
+    engine_id: &str,
+) -> Result<Arc<dyn OcrAdapter>, String> {
+    match engine_id {
+        "tesseract" => TesseractAdapter::new(app.clone())
+            .map(|adapter| Arc::new(adapter) as Arc<dyn OcrAdapter>)
+            .map_err(|error| error.to_string()),
+        "rapidocr" => build_rapidocr_adapter().await,
+        other => Err(format!("unknown OCR engine: {other}")),
+    }
+}
+
+#[cfg(feature = "rapidocr")]
+async fn build_rapidocr_adapter() -> Result<Arc<dyn OcrAdapter>, String> {
+    use crate::ocr::{rapidocr::RapidOcrAdapter, rapidocr_install::default_rapidocr_dir};
+
+    let models_dir = default_rapidocr_dir().map_err(|error| error.to_string())?;
+    let adapter = RapidOcrAdapter::new(models_dir);
+    adapter
+        .verify_install()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Arc::new(adapter) as Arc<dyn OcrAdapter>)
+}
+
+#[cfg(not(feature = "rapidocr"))]
+async fn build_rapidocr_adapter() -> Result<Arc<dyn OcrAdapter>, String> {
+    Err("RapidOCR support is not enabled in this build".to_string())
 }
 
 fn canonical_pdf_path(input_path: &str) -> Result<PathBuf, std::io::Error> {
@@ -113,15 +162,26 @@ fn create_queued_job(
             "UPDATE documents
              SET original_path = ?2,
                  output_path = NULL,
-                 page_count = 0,
-                 ocr_engine = NULL,
-                 status = 'queued',
-                 error_message = NULL,
-                 updated_at = ?3
+                display_name = NULL,
+                ai_summary = NULL,
+                page_count = 0,
+                ocr_engine = NULL,
+                ai_provider = NULL,
+                ai_naming_enabled = 0,
+                status = 'queued',
+                error_message = NULL,
+                updated_at = ?3
              WHERE id = ?1",
             params![document_id, original_path, now],
         )?;
-        transaction.execute("DELETE FROM pages WHERE document_id = ?1", params![document_id])?;
+        transaction.execute(
+            "DELETE FROM pages WHERE document_id = ?1",
+            params![document_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM pending_renames WHERE document_id = ?1",
+            params![document_id],
+        )?;
         document_id
     } else {
         transaction.execute(

@@ -75,10 +75,17 @@ Compare the hash with the `checksums.txt` file attached to the same GitHub Relea
 
 PDF-Parser uses the Tauri updater plugin. Each release publishes an Ed25519-signed `latest.json` feed to GitHub Releases, and the app checks that feed on launch and every 6 hours while running. When an update is available, the app shows release notes and an **Install and restart** action. The updater verifies the signature with the public key embedded in `tauri.conf.json` before installing.
 
+## RapidOCR opt-in models
+
+RapidOCR is not bundled in the default installers. Users install the PP-OCRv5 ONNX models from Settings → OCR; files are stored in `%LOCALAPPDATA%\PDF-Parser\engines\rapidocr\` and SHA256-verified after download and before each load. See `MODELS.md` and `scripts\gen_rapidocr_manifest.ps1` for the pinned URLs, sizes, and regeneration steps.
+
+The full RapidOCR smoke test downloads about 179 MB, so CI/unit validation uses manifest and tamper tests instead of downloading models by default.
+
 ## Verification
 
 ```powershell
 pnpm build
-cargo build --release --manifest-path src-tauri\Cargo.toml
+cargo build --release
+cargo build --release --features rapidocr
 pnpm tauri build --debug
 ```

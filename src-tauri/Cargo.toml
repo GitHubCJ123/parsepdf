@@ -12,6 +12,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = []
+rapidocr = ["dep:imageproc", "dep:ndarray", "dep:ort"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7.1"
@@ -27,6 +31,7 @@ tauri-plugin-process = "2.3.1"
 anyhow = "1.0.102"
 async-trait = "0.1.89"
 image = "0.25"
+imageproc = { version = "0.25", optional = true }
 lopdf = "0.34"
 quick-xml = "0.36"
 sha2 = "0.10"
@@ -37,3 +42,14 @@ tracing-subscriber = "0.3.23"
 tauri-plugin-shell = "2.3.2"
 tokio = { version = "1", features = ["full"] }
 pdfium-render = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = "0.3"
+ndarray = { version = "0.17", optional = true }
+ort = { version = "2.0.0-rc.12", optional = true }
+tauri-plugin-stronghold = "2"
+argon2 = "0.5"
+rand = "0.8"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_System_Memory", "Win32_Foundation"] }
+iota_stronghold = "2.1.0"

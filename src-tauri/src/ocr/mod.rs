@@ -1,6 +1,9 @@
 pub mod composer;
 pub mod geometry;
 pub mod pdf_pipeline;
+pub mod rapidocr;
+pub mod rapidocr_install;
+pub mod rapidocr_manifest;
 pub mod tesseract;
 pub mod worker_pool;
 

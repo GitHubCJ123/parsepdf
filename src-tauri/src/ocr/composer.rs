@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Context;
-use lopdf::{content::Content, content::Operation, dictionary, Dictionary, Document, Object, ObjectId, Stream};
+use lopdf::{
+    content::Content, content::Operation, dictionary, Dictionary, Document, Object, ObjectId,
+    Stream,
+};
 
 use super::{geometry::PageGeometry, OcrPage};
 
@@ -17,7 +20,8 @@ pub fn compose_searchable_pdf(
     output_path: &Path,
     layers: &[PageOcrLayer],
 ) -> anyhow::Result<()> {
-    let mut document = Document::load(input_path).context("failed to load original PDF for composition")?;
+    let mut document =
+        Document::load(input_path).context("failed to load original PDF for composition")?;
     let pages = document.get_pages();
     let layers_by_page = layers
         .iter()
@@ -44,8 +48,9 @@ pub fn compose_searchable_pdf(
                 .with_context(|| format!("failed to add OCR font on page {page_number}"))?;
             let stream_id = append_text_layer_stream(&mut document, layer)
                 .with_context(|| format!("failed to build OCR text layer on page {page_number}"))?;
-            append_content_stream(&mut document, page_id, stream_id)
-                .with_context(|| format!("failed to append OCR text layer on page {page_number}"))?;
+            append_content_stream(&mut document, page_id, stream_id).with_context(|| {
+                format!("failed to append OCR text layer on page {page_number}")
+            })?;
         }
     }
 
@@ -57,7 +62,11 @@ pub fn compose_searchable_pdf(
     Ok(())
 }
 
-fn add_font_resource(document: &mut Document, page_id: ObjectId, font_id: ObjectId) -> anyhow::Result<()> {
+fn add_font_resource(
+    document: &mut Document,
+    page_id: ObjectId,
+    font_id: ObjectId,
+) -> anyhow::Result<()> {
     let (direct_resources, inherited_ids) = document.get_page_resources(page_id)?;
     let mut resources = if let Some(resources) = direct_resources {
         resources.clone()
@@ -83,7 +92,10 @@ fn add_font_resource(document: &mut Document, page_id: ObjectId, font_id: Object
     Ok(())
 }
 
-fn append_text_layer_stream(document: &mut Document, layer: &PageOcrLayer) -> anyhow::Result<ObjectId> {
+fn append_text_layer_stream(
+    document: &mut Document,
+    layer: &PageOcrLayer,
+) -> anyhow::Result<ObjectId> {
     let mut operations = Vec::new();
     operations.push(Operation::new("q", vec![]));
 

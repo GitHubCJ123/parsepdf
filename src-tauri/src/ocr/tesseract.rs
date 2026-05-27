@@ -141,10 +141,9 @@ fn parse_hocr(
                 let name = String::from_utf8_lossy(start.name().as_ref()).to_string();
                 let attrs = collect_attrs(&reader, &start)?;
                 if name.eq_ignore_ascii_case("div") {
-                    let is_block = attrs
-                        .class
-                        .as_deref()
-                        .is_some_and(|class| class.contains("ocr_carea") || class.contains("ocrx_block"));
+                    let is_block = attrs.class.as_deref().is_some_and(|class| {
+                        class.contains("ocr_carea") || class.contains("ocrx_block")
+                    });
                     if is_block {
                         finish_line(&mut current_block, &mut current_line);
                         finish_block(&mut blocks, &mut current_block);
@@ -219,11 +218,9 @@ fn parse_hocr(
                         SpanKind::Line => finish_line(&mut current_block, &mut current_line),
                         SpanKind::Other => {}
                     }
-                } else if name.eq_ignore_ascii_case("div") {
-                    if div_stack.pop().unwrap_or(false) {
-                        finish_line(&mut current_block, &mut current_line);
-                        finish_block(&mut blocks, &mut current_block);
-                    }
+                } else if name.eq_ignore_ascii_case("div") && div_stack.pop().unwrap_or(false) {
+                    finish_line(&mut current_block, &mut current_line);
+                    finish_block(&mut blocks, &mut current_block);
                 }
             }
             Event::Eof => break,
@@ -291,12 +288,17 @@ struct HocrAttrs {
     title: Option<String>,
 }
 
-fn collect_attrs(reader: &Reader<&[u8]>, start: &quick_xml::events::BytesStart<'_>) -> anyhow::Result<HocrAttrs> {
+fn collect_attrs(
+    reader: &Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart<'_>,
+) -> anyhow::Result<HocrAttrs> {
     let mut attrs = HocrAttrs::default();
     for attr in start.attributes().with_checks(false) {
         let attr = attr?;
         let key = std::str::from_utf8(attr.key.as_ref())?;
-        let value = attr.decode_and_unescape_value(reader.decoder())?.into_owned();
+        let value = attr
+            .decode_and_unescape_value(reader.decoder())?
+            .into_owned();
         match key {
             "class" => attrs.class = Some(value),
             "title" => attrs.title = Some(value),
@@ -419,7 +421,10 @@ mod tests {
             .unwrap();
         assert!(langs.status.success());
         let langs_stdout = String::from_utf8_lossy(&langs.stdout);
-        assert!(langs_stdout.lines().any(|line| line.trim() == "eng"), "{langs_stdout}");
+        assert!(
+            langs_stdout.lines().any(|line| line.trim() == "eng"),
+            "{langs_stdout}"
+        );
     }
 
     #[test]

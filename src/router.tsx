@@ -8,6 +8,7 @@ import { AppLayout } from "@/app/layout";
 import { ChatPage } from "@/app/chat/page";
 import { InboxPage } from "@/app/inbox/page";
 import { LibraryPage } from "@/app/library/page";
+import { ReviewRenamesPage } from "@/app/library/review-renames";
 import { SearchPage } from "@/app/search/page";
 import { SettingsPage } from "@/app/settings/page";
 
@@ -35,6 +36,12 @@ const libraryRoute = createRoute({
   component: LibraryPage,
 });
 
+const reviewRenamesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/library/review-renames",
+  component: ReviewRenamesPage,
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
@@ -57,6 +64,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   inboxRoute,
   libraryRoute,
+  reviewRenamesRoute,
   searchRoute,
   chatRoute,
   settingsRoute,

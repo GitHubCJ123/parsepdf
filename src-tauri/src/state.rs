@@ -38,7 +38,12 @@ fn resolve_pdfium_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("binaries").join("pdfium").join("pdfium.dll"));
+        candidates.push(
+            resource_dir
+                .join("binaries")
+                .join("pdfium")
+                .join("pdfium.dll"),
+        );
     }
 
     if let Ok(cwd) = std::env::current_dir() {

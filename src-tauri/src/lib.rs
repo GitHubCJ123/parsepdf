@@ -22,12 +22,20 @@ pub fn run() {
             tauri_plugin_sql::Builder::default()
                 .add_migrations(
                     &database_url,
-                    vec![Migration {
-                        version: 1,
-                        description: "initial schema",
-                        sql: include_str!("../migrations/001_initial.sql"),
-                        kind: MigrationKind::Up,
-                    }],
+                    vec![
+                        Migration {
+                            version: 1,
+                            description: "initial schema",
+                            sql: include_str!("../migrations/001_initial.sql"),
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 3,
+                            description: "phase 2 ai naming and library",
+                            sql: include_str!("../migrations/003_phase2.sql"),
+                            kind: MigrationKind::Up,
+                        },
+                    ],
                 )
                 .build(),
         )
@@ -36,16 +44,33 @@ pub fn run() {
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             let app_state = state::AppState::new(app.handle(), database.path.into()).map_err(
                 |error| -> Box<dyn std::error::Error> {
-                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))
+                    Box::new(std::io::Error::other(error.to_string()))
                 },
             )?;
             app.manage(app_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::ai::ai_apply_rename,
+            commands::ai::ai_health_check,
+            commands::ai::ai_list_models,
+            commands::ai::ai_propose_names,
             commands::database::initialize_database,
+            commands::engines::ocr_install_engine,
+            commands::engines::ocr_list_engines,
+            commands::engines::ocr_remove_engine,
+            commands::engines::ocr_set_default,
+            commands::library::library_delete,
+            commands::library::library_get,
+            commands::library::library_list,
+            commands::library::library_open_external,
+            commands::library::library_pending_renames,
+            commands::library::library_skip_rename,
             commands::process::process_pdf,
-            commands::updates::prepare_for_update
+            commands::updates::prepare_for_update,
+            ai::secrets::secrets_delete,
+            ai::secrets::secrets_get,
+            ai::secrets::secrets_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running PDF-Parser");

@@ -22,6 +22,11 @@ pub enum AppEventPayload {
     },
     #[serde(rename = "document.updated")]
     DocumentUpdated { document_id: i64, status: String },
+    #[serde(rename = "document.naming_ready")]
+    DocumentNamingReady {
+        document_id: i64,
+        proposed_name: String,
+    },
     #[serde(rename = "watcher.error")]
     WatcherError { folder: String, error: String },
 }

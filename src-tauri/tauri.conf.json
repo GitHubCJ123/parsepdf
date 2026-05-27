@@ -20,12 +20,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self' ipc: https://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self' ipc: https://ipc.localhost asset: https://asset.localhost; worker-src 'self' blob:; object-src 'self' asset: https://asset.localhost; frame-src 'self' asset: https://asset.localhost"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": ["nsis", "msi"],
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/tesseract/tesseract"],
     "resources": [

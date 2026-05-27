@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, FileText, Loader2, UploadCloud, XCircle } from "lucide-react";
+import { useOcrEngines } from "@/components/engine-selector";
+import { QualityUpgradePrompt } from "@/components/quality-upgrade-prompt";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { listenAppEvent, processPdf, type JobProgressEvent } from "@/lib/ipc";
+import { listenAppEvent, processPdf, setDefaultOcrEngine, type EngineInfo, type JobProgressEvent, type DocumentRecord } from "@/lib/ipc";
 
 type JobRow = {
   id: string;
@@ -18,14 +21,32 @@ type JobRow = {
   error?: string;
   outputPath?: string | null;
   pageCount?: number;
+  engine?: string;
+  meanConfidence?: number | null;
 };
 
 export function InboxPage() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const { data: engines = [] } = useOcrEngines();
+  const defaultEngineId = engines.find((engine) => engine.is_default)?.id ?? "tesseract";
+  const [selectedEngineId, setSelectedEngineId] = useState(defaultEngineId);
+
+  useEffect(() => {
+    setSelectedEngineId(defaultEngineId);
+  }, [defaultEngineId]);
 
   const runningCount = useMemo(
     () => jobs.filter((job) => job.status === "running").length,
+    [jobs],
+  );
+  const rapidOcrInstalled = engines.some((engine) => engine.id === "rapidocr" && engine.status === "installed");
+  const lowConfidenceCount = useMemo(
+    () => jobs.filter((job) => job.engine === "tesseract" && normalizedConfidence(job.meanConfidence) < 0.75).length,
+    [jobs],
+  );
+  const scanLikeQueueCount = useMemo(
+    () => jobs.filter((job) => job.status === "running" && !job.pageCount).length,
     [jobs],
   );
 
@@ -84,20 +105,22 @@ export function InboxPage() {
   const processPath = useCallback(async (path: string) => {
     const filename = basename(path);
     const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const engineId = selectedEngineId;
     setJobs((current) => [
       {
         id: localId,
         filename,
         stage: "queued",
-        message: "Queued for OCR",
+        message: `Queued for ${engineLabel(engineId, engines)}`,
         progress: 0,
         status: "running",
+        engine: engineId,
       },
       ...current,
     ]);
 
     try {
-      const record = await processPdf(path);
+      const record = await processPdf(path, engineId);
       setJobs((current) =>
         current.map((job) =>
           job.id === localId || job.documentId === record.id
@@ -111,6 +134,8 @@ export function InboxPage() {
                 status: record.status === "error" ? "error" : "done",
                 outputPath: record.output_path,
                 pageCount: record.page_count,
+                engine: record.ocr_engine ?? engineId,
+                meanConfidence: documentMeanConfidence(record),
               }
             : job,
         ),
@@ -131,7 +156,7 @@ export function InboxPage() {
         ),
       );
     }
-  }, []);
+  }, [engines, selectedEngineId]);
 
   useEffect(() => {
     const unlistenPromise = getCurrentWebviewWindow().onDragDropEvent((event) => {
@@ -192,14 +217,15 @@ export function InboxPage() {
                 Pick a PDF. Preserve the original. Add a hidden searchable text layer.
               </h1>
               <p className="max-w-xl text-sm leading-6 text-muted-foreground">
-                Phase 1 runs local Tesseract OCR, writes the processed PDF to your configured output folder, and indexes every page in SQLite.
+                Run the default local OCR engine or override a single job with RapidOCR when precision matters.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button type="button" size="lg" onClick={() => void choosePdf()}>
                 <UploadCloud className="size-4" />
-                Choose PDF
+                Process PDF
               </Button>
+              <EnginePicker engines={engines} selectedEngineId={selectedEngineId} onChange={setSelectedEngineId} />
               <div className="rounded-lg border border-border bg-background/50 px-3 py-2 font-mono text-xs text-muted-foreground">
                 {runningCount > 0 ? `${runningCount} active job${runningCount === 1 ? "" : "s"}` : "Ready"}
               </div>
@@ -224,6 +250,23 @@ export function InboxPage() {
           </div>
         </div>
       </section>
+
+      <QualityUpgradePrompt
+        lowConfidenceCount={lowConfidenceCount}
+        scanLikeQueueCount={scanLikeQueueCount}
+        rapidOcrInstalled={rapidOcrInstalled}
+        onUseOnce={() => {
+          if (rapidOcrInstalled) {
+            setSelectedEngineId("rapidocr");
+          }
+        }}
+        onSetDefault={() => {
+          if (rapidOcrInstalled) {
+            setSelectedEngineId("rapidocr");
+            void setDefaultOcrEngine("rapidocr");
+          }
+        }}
+      />
 
       <section className="rounded-xl border border-border bg-card/60">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -279,6 +322,43 @@ function JobItem({ job }: { job: JobRow }) {
   );
 }
 
+function EnginePicker({
+  engines,
+  selectedEngineId,
+  onChange,
+}: {
+  engines: EngineInfo[];
+  selectedEngineId: string;
+  onChange: (engineId: string) => void;
+}) {
+  const rapidOcr = engines.find((engine) => engine.id === "rapidocr");
+  const rapidOcrInstalled = rapidOcr?.status === "installed";
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/50 px-2 py-1.5">
+      <label className="sr-only" htmlFor="ocr-engine-picker">
+        OCR engine for this job
+      </label>
+      <select
+        id="ocr-engine-picker"
+        value={selectedEngineId}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-md border border-border bg-card px-2 py-1.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value="tesseract">Process with Tesseract (fast)</option>
+        <option value="rapidocr" disabled={!rapidOcrInstalled}>
+          {rapidOcrInstalled ? "Process with RapidOCR (high quality)" : "RapidOCR — install first"}
+        </option>
+      </select>
+      {!rapidOcrInstalled ? (
+        <Link to="/settings" className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+          Settings → OCR
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
 function basename(path: string) {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : path;
@@ -286,4 +366,25 @@ function basename(path: string) {
 
 function formatStage(stage: string) {
   return stage.replace(/_/g, " ");
+}
+
+function engineLabel(engineId: string, engines: EngineInfo[]) {
+  return engines.find((engine) => engine.id === engineId)?.name ?? engineId;
+}
+
+function documentMeanConfidence(record: DocumentRecord) {
+  const confidences = record.pages
+    .map((page) => page.mean_confidence)
+    .filter((confidence): confidence is number => typeof confidence === "number");
+  if (confidences.length === 0) {
+    return null;
+  }
+  return confidences.reduce((sum, confidence) => sum + confidence, 0) / confidences.length;
+}
+
+function normalizedConfidence(confidence: number | null | undefined) {
+  if (confidence == null) {
+    return 1;
+  }
+  return confidence > 1 ? confidence / 100 : confidence;
 }

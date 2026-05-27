@@ -11,9 +11,11 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+target
 src-tauri/target
 src-tauri/gen/schemas
 .tools
+.rapidocr-manifest-cache
 samples
 *.local
 
