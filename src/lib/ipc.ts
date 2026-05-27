@@ -5,9 +5,39 @@ export type JobProgressEvent = {
   type: "job.progress";
   job_id: number;
   document_id: number;
+  filename: string;
   stage: string;
   progress_pct: number;
   message: string;
+  page_number?: number | null;
+  page_count?: number;
+};
+
+export type PageRecord = {
+  id: number;
+  page_number: number;
+  text: string;
+  ocr_status: string;
+  mean_confidence: number | null;
+  width_px: number | null;
+  height_px: number | null;
+  dpi: number | null;
+  rotation: number;
+};
+
+export type DocumentRecord = {
+  id: number;
+  sha256: string;
+  original_path: string;
+  output_path: string | null;
+  display_name: string | null;
+  page_count: number;
+  ocr_engine: string | null;
+  status: string;
+  error_message: string | null;
+  ingested_at: number;
+  updated_at: number;
+  pages: PageRecord[];
 };
 
 export type JobFailedEvent = {
@@ -43,6 +73,10 @@ export type DatabaseInfo = {
 
 export function initializeDatabase() {
   return invoke<DatabaseInfo>("initialize_database");
+}
+
+export function processPdf(inputPath: string) {
+  return invoke<DocumentRecord>("process_pdf", { inputPath });
 }
 
 export function listenAppEvent<TType extends AppEvent["type"]>(

@@ -9,6 +9,16 @@
     "dialog:default",
     "process:default",
     "sql:default",
-    "updater:default"
+    "updater:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "tesseract",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

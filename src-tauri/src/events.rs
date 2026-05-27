@@ -7,9 +7,12 @@ pub enum AppEventPayload {
     JobProgress {
         job_id: i64,
         document_id: i64,
+        filename: String,
         stage: String,
         progress_pct: f32,
         message: String,
+        page_number: Option<i64>,
+        page_count: i64,
     },
     #[serde(rename = "job.failed")]
     JobFailed {

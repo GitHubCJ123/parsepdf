@@ -40,15 +40,30 @@ pub fn database_url() -> Result<String, DbError> {
     Ok(database_url_from_path(&database_path()?))
 }
 
-pub fn prepare_database() -> Result<AppDatabase, DbError> {
-    let path = database_path()?;
+pub fn open_connection() -> Result<Connection, DbError> {
+    open_connection_at(&database_path()?)
+}
+
+pub fn open_connection_at(path: &Path) -> Result<Connection, DbError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-
-    let vec_registered = register_sqlite_vec();
-    let connection = Connection::open(&path)?;
+    let connection = Connection::open(path)?;
     apply_pragmas(&connection)?;
+    Ok(connection)
+}
+
+pub fn default_output_dir() -> Result<PathBuf, DbError> {
+    let base = dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
+        .unwrap_or(app_data_dir()?);
+    Ok(base.join("PDF-Parser").join("Processed"))
+}
+
+pub fn prepare_database() -> Result<AppDatabase, DbError> {
+    let path = database_path()?;
+    let vec_registered = register_sqlite_vec();
+    let connection = open_connection_at(&path)?;
 
     let sqlite_vec_loaded = match vec_registered {
         Ok(()) => {
