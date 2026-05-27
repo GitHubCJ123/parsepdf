@@ -51,16 +51,18 @@ pub fn prepare_database() -> Result<AppDatabase, DbError> {
     apply_pragmas(&connection)?;
 
     let sqlite_vec_loaded = match vec_registered {
-        Ok(()) => match connection.query_row("SELECT vec_version()", [], |row| row.get::<_, String>(0)) {
-            Ok(version) => {
-                eprintln!("[db] sqlite-vec loaded ({version})");
-                true
+        Ok(()) => {
+            match connection.query_row("SELECT vec_version()", [], |row| row.get::<_, String>(0)) {
+                Ok(version) => {
+                    eprintln!("[db] sqlite-vec loaded ({version})");
+                    true
+                }
+                Err(error) => {
+                    eprintln!("[db] sqlite-vec verification failed: {error}");
+                    false
+                }
             }
-            Err(error) => {
-                eprintln!("[db] sqlite-vec verification failed: {error}");
-                false
-            }
-        },
+        }
         Err(code) => {
             eprintln!("[db] sqlite-vec registration failed with code {code}");
             false
@@ -89,11 +91,18 @@ fn database_url_from_path(path: &Path) -> String {
 }
 
 fn register_sqlite_vec() -> Result<(), i32> {
+    type SqliteExtensionInit = unsafe extern "C" fn(
+        *mut rusqlite::ffi::sqlite3,
+        *mut *const std::ffi::c_char,
+        *const rusqlite::ffi::sqlite3_api_routines,
+    ) -> i32;
+
     *SQLITE_VEC_REGISTRATION.get_or_init(|| {
         let result = unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            let init = std::mem::transmute::<*const (), SqliteExtensionInit>(
                 sqlite_vec::sqlite3_vec_init as *const (),
-            )))
+            );
+            rusqlite::ffi::sqlite3_auto_extension(Some(init))
         };
 
         if result == rusqlite::ffi::SQLITE_OK {

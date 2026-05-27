@@ -13,6 +13,7 @@ dist
 dist-ssr
 src-tauri/target
 src-tauri/gen/schemas
+.tools
 *.local
 
 # Environment
@@ -31,3 +32,9 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Local samples and signing material
+samples/
+*.key
+tauri_updater.key*
+*.pem

@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/command-palette";
 import { Sidebar } from "@/components/sidebar";
+import { UpdateNotifier } from "@/components/update-notifier";
 import { useUiStore } from "@/stores/ui-store";
 
 export function AppLayout() {
@@ -38,6 +39,7 @@ export function AppLayout() {
         </main>
       </div>
       <CommandPalette />
+      <UpdateNotifier />
     </div>
   );
 }
