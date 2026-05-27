@@ -3,6 +3,7 @@ mod commands;
 pub mod db;
 pub mod events;
 pub mod ocr;
+pub mod search;
 pub mod state;
 
 use tauri::Manager;
@@ -33,6 +34,12 @@ pub fn run() {
                             version: 3,
                             description: "phase 2 ai naming and library",
                             sql: include_str!("../migrations/003_phase2.sql"),
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 4,
+                            description: "phase 3 full text search",
+                            sql: include_str!("../migrations/004_phase3.sql"),
                             kind: MigrationKind::Up,
                         },
                     ],
@@ -67,6 +74,8 @@ pub fn run() {
             commands::library::library_pending_renames,
             commands::library::library_skip_rename,
             commands::process::process_pdf,
+            commands::search::search,
+            commands::backfill::search_rebuild_index,
             commands::updates::prepare_for_update,
             ai::secrets::secrets_delete,
             ai::secrets::secrets_get,

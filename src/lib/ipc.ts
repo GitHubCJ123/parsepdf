@@ -114,6 +114,42 @@ export type PendingRenameRow = {
   reviewed: number;
 };
 
+export type SearchSort = "relevance" | "newestFirst" | "oldestFirst";
+
+export type SearchQuery = {
+  q: string;
+  limit?: number;
+  offset?: number;
+  dateFrom?: number | null;
+  dateTo?: number | null;
+  engine?: "tesseract" | "rapidocr" | null;
+  sort?: SearchSort;
+};
+
+export type SearchHit = {
+  document_id: number;
+  display_name: string;
+  page_number: number;
+  page_id: number;
+  snippet_html: string;
+  bm25_score: number;
+  document_ingested_at: number;
+  ocr_engine: string | null;
+};
+
+export type SearchResult = {
+  hits: SearchHit[];
+  total_hits: number;
+  took_ms: number;
+  query_warnings: string[];
+};
+
+export type RebuildReport = {
+  documents: number;
+  pages: number;
+  took_ms: number;
+};
+
 export type EngineInstallProgressEvent = {
   engine_id: string;
   phase: string;
@@ -236,4 +272,12 @@ export function librarySkipRename(documentId: number) {
 
 export function libraryOpenExternal(documentId: number) {
   return invoke<void>("library_open_external", { documentId });
+}
+
+export function searchDocuments(query: SearchQuery) {
+  return invoke<SearchResult>("search", { query });
+}
+
+export function searchRebuildIndex() {
+  return invoke<RebuildReport>("search_rebuild_index");
 }

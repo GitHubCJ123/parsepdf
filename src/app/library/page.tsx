@@ -14,6 +14,7 @@ export function LibraryPage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [previewPage, setPreviewPage] = useState(1);
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
@@ -30,6 +31,13 @@ export function LibraryPage() {
 
   useEffect(() => {
     void refresh();
+    const params = new URLSearchParams(window.location.search);
+    const documentId = parsePositiveInt(params.get("doc"));
+    const page = parsePositiveInt(params.get("page"));
+    if (documentId != null) {
+      setSelectedId(documentId);
+      setPreviewPage(page ?? 1);
+    }
   }, []);
 
   useEffect(() => {
@@ -140,7 +148,7 @@ export function LibraryPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredDocuments.map((document) => (
-                  <tr key={document.id} onClick={() => setSelectedId(document.id)} className="cursor-pointer transition-colors hover:bg-secondary/45">
+                  <tr key={document.id} onClick={() => { setPreviewPage(1); setSelectedId(document.id); }} className="cursor-pointer transition-colors hover:bg-secondary/45">
                     <Td className="max-w-[20rem]"><div className="truncate font-medium">{document.display_name}</div></Td>
                     <Td className="max-w-[16rem]"><div className="truncate text-muted-foreground">{document.original_name}</div></Td>
                     <Td>{document.page_count}</Td>
@@ -156,16 +164,17 @@ export function LibraryPage() {
         )}
       </section>
 
-      <PreviewDrawer detail={detail} loading={detailLoading} onClose={() => setSelectedId(null)} onDelete={deleteSelected} />
+      <PreviewDrawer detail={detail} loading={detailLoading} currentPage={previewPage} onClose={() => { setSelectedId(null); setPreviewPage(1); }} onDelete={deleteSelected} />
     </div>
   );
 }
 
-function PreviewDrawer({ detail, loading, onClose, onDelete }: { detail: DocumentDetail | null; loading: boolean; onClose: () => void; onDelete: (documentId: number) => Promise<void> }) {
-  const [page, setPage] = useState(1);
+function PreviewDrawer({ detail, loading, currentPage, onClose, onDelete }: { detail: DocumentDetail | null; loading: boolean; currentPage: number; onClose: () => void; onDelete: (documentId: number) => Promise<void> }) {
+  const [page, setPage] = useState(currentPage);
   useEffect(() => {
-    setPage(1);
-  }, [detail?.document.id]);
+    const maxPage = Math.max(1, detail?.document.page_count ?? currentPage);
+    setPage(Math.min(maxPage, Math.max(1, currentPage)));
+  }, [detail?.document.id, detail?.document.page_count, currentPage]);
 
   if (!detail && !loading) return null;
 
@@ -250,6 +259,12 @@ function Badge({ children, muted = false }: { children: ReactNode; muted?: boole
 
 function formatDate(value: number) {
   return format(new Date(value * 1000), "MMM d, yyyy");
+}
+
+function parsePositiveInt(value: string | null) {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function formatBytes(value?: number | null) {
