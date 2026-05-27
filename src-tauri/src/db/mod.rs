@@ -45,12 +45,17 @@ pub fn open_connection() -> Result<Connection, DbError> {
 }
 
 pub fn open_connection_at(path: &Path) -> Result<Connection, DbError> {
+    let _ = register_sqlite_vec();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let connection = Connection::open(path)?;
     apply_pragmas(&connection)?;
     Ok(connection)
+}
+
+pub fn register_sqlite_vec_auto_extension() {
+    let _ = register_sqlite_vec();
 }
 
 pub fn default_output_dir() -> Result<PathBuf, DbError> {

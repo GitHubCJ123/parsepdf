@@ -1,17 +1,19 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, Context};
 use pdfium_render::prelude::Pdfium;
 use tauri::{AppHandle, Manager};
 use tracing::info;
 
-use crate::ocr::worker_pool::OcrWorkerPool;
+use crate::{events::ProgressAggregator, ocr::worker_pool::OcrWorkerPool, rag::EmbeddingRuntime};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db_path: PathBuf,
     pub pdfium_path: PathBuf,
     pub worker_pool: OcrWorkerPool,
+    pub progress: ProgressAggregator,
+    pub embeddings: Arc<EmbeddingRuntime>,
 }
 
 impl AppState {
@@ -21,6 +23,9 @@ impl AppState {
             format!("failed to bind pdfium library at {}", pdfium_path.display())
         })?;
         let worker_pool = OcrWorkerPool::new();
+        let progress = ProgressAggregator::new(app.clone());
+        let embeddings = Arc::new(EmbeddingRuntime::from_default_cache()?);
+        embeddings.prewarm();
         info!(
             pdfium_path = %pdfium_path.display(),
             workers = worker_pool.workers(),
@@ -30,6 +35,8 @@ impl AppState {
             db_path,
             pdfium_path,
             worker_pool,
+            progress,
+            embeddings,
         })
     }
 }

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use super::{OcrAdapter, OcrPage};
 
@@ -31,9 +33,17 @@ impl OcrWorkerPool {
         image: image::RgbaImage,
         page_index: u32,
         dpi: u32,
+        cancel: CancellationToken,
     ) -> anyhow::Result<OcrPage> {
-        let _permit = self.semaphore.acquire().await?;
-        engine.ocr_page(&image, page_index, dpi).await
+        let permit = tokio::select! {
+            permit = self.semaphore.acquire() => permit?,
+            _ = cancel.cancelled() => return Err(anyhow!("OCR cancelled")),
+        };
+        let _permit = permit;
+        if cancel.is_cancelled() {
+            return Err(anyhow!("OCR cancelled"));
+        }
+        engine.ocr_page(&image, page_index, dpi, cancel).await
     }
 }
 

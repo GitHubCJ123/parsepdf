@@ -116,8 +116,8 @@ fn with_store<T>(
         let salt = load_or_create_random(&paths.salt, KEY_BYTES)?;
         let machine_secret = load_or_create_machine_secret(&paths.dpapi_blob)?;
         let password = derive_password(&salt, &machine_secret)?;
-        let stronghold =
-            Stronghold::new(&paths.vault, password).map_err(|_| SecretError::KeychainUnavailable)?;
+        let stronghold = Stronghold::new(&paths.vault, password)
+            .map_err(|_| SecretError::KeychainUnavailable)?;
         stores.insert(paths.vault.clone(), stronghold);
     }
     let stronghold = stores

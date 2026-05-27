@@ -178,11 +178,19 @@ mod adapter {
             image: &image::RgbaImage,
             page_index: u32,
             dpi: u32,
+            cancel: tokio_util::sync::CancellationToken,
         ) -> anyhow::Result<OcrPage> {
+            if cancel.is_cancelled() {
+                return Err(anyhow!("OCR cancelled"));
+            }
             self.verify_install().await?;
             let session = self.session().await?;
             let mut session = session.lock().await;
-            session.ocr_page(image, page_index, dpi)
+            let page = session.ocr_page(image, page_index, dpi)?;
+            if cancel.is_cancelled() {
+                return Err(anyhow!("OCR cancelled"));
+            }
+            Ok(page)
         }
     }
 

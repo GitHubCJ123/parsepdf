@@ -59,5 +59,6 @@ pub trait OcrAdapter: Send + Sync {
         image: &image::RgbaImage,
         page_index: u32,
         dpi: u32,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<OcrPage>;
 }

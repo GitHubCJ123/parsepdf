@@ -10,12 +10,13 @@ use pdfium_render::prelude::*;
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use thiserror::Error;
 use tokio::task;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{commands::ai as ai_commands, db, state::AppState};
+use crate::{commands::ai as ai_commands, db, events::JobProgressUpdate, rag, state::AppState};
 
 use super::{
     composer::{compose_searchable_pdf, PageOcrLayer},
@@ -73,8 +74,14 @@ pub enum PipelineError {
     Join(String),
     #[error("unsafe output path: {0}")]
     UnsafeOutputPath(String),
+    #[error("job was cancelled")]
+    Cancelled,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pipeline entry point passes explicit job context"
+)]
 pub async fn process_pdf(
     app: AppHandle,
     state: AppState,
@@ -83,13 +90,16 @@ pub async fn process_pdf(
     document_id: i64,
     job_id: i64,
     engine: Arc<dyn OcrAdapter>,
+    cancel: CancellationToken,
 ) -> Result<DocumentRecord, PipelineError> {
+    ensure_not_cancelled(&cancel)?;
     let filename = input_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("PDF")
         .to_string();
     let page_count = load_page_count(state.pdfium_path.clone(), input_path.clone()).await?;
+    ensure_not_cancelled(&cancel)?;
     update_document_stage(
         &state.db_path,
         document_id,
@@ -100,7 +110,7 @@ pub async fn process_pdf(
         None,
     )?;
     emit_progress(
-        &app,
+        &state,
         &filename,
         job_id,
         document_id,
@@ -123,9 +133,10 @@ pub async fn process_pdf(
     let mut any_ocr_failed = false;
 
     for page_index in 0..page_count {
+        ensure_not_cancelled(&cancel)?;
         let page_number = page_index as i64 + 1;
         emit_progress(
-            &app,
+            &state,
             &filename,
             job_id,
             document_id,
@@ -143,6 +154,7 @@ pub async fn process_pdf(
             OCR_DPI,
         )
         .await?;
+        ensure_not_cancelled(&cancel)?;
 
         let processed = match extraction {
             PageExtraction::Native(native) => {
@@ -174,7 +186,7 @@ pub async fn process_pdf(
                     None,
                 )?;
                 emit_progress(
-                    &app,
+                    &state,
                     &filename,
                     job_id,
                     document_id,
@@ -187,7 +199,13 @@ pub async fn process_pdf(
 
                 match state
                     .worker_pool
-                    .ocr_page(engine.clone(), rasterized.image, page_index as u32, OCR_DPI)
+                    .ocr_page(
+                        engine.clone(),
+                        rasterized.image,
+                        page_index as u32,
+                        OCR_DPI,
+                        cancel.clone(),
+                    )
                     .await
                 {
                     Ok(ocr_page) => ProcessedPage {
@@ -203,6 +221,9 @@ pub async fn process_pdf(
                         ocr_page: Some(ocr_page),
                     },
                     Err(error) => {
+                        if cancel.is_cancelled() {
+                            return Err(PipelineError::Cancelled);
+                        }
                         any_ocr_failed = true;
                         info!(document_id, job_id, page_number, error = %error, "OCR failed for page");
                         ProcessedPage {
@@ -222,10 +243,9 @@ pub async fn process_pdf(
             }
         };
 
-        insert_page_record(&state.db_path, document_id, &processed)?;
         processed_pages.push(processed);
         emit_progress(
-            &app,
+            &state,
             &filename,
             job_id,
             document_id,
@@ -238,7 +258,7 @@ pub async fn process_pdf(
     }
 
     emit_progress(
-        &app,
+        &state,
         &filename,
         job_id,
         document_id,
@@ -258,6 +278,7 @@ pub async fn process_pdf(
         None,
     )?;
 
+    ensure_not_cancelled(&cancel)?;
     let sha256 = compute_sha256(&input_path)?;
     let output_path = prepare_output_path(&input_path, &output_dir, &sha256)?;
     let layers = processed_pages
@@ -276,6 +297,11 @@ pub async fn process_pdf(
     task::spawn_blocking(move || compose_searchable_pdf(&compose_input, &compose_output, &layers))
         .await
         .map_err(|error| PipelineError::Join(error.to_string()))??;
+    if cancel.is_cancelled() {
+        cleanup_partial_output(&output_path);
+        return Err(PipelineError::Cancelled);
+    }
+    replace_page_records(&state.db_path, document_id, &processed_pages)?;
 
     let queue_ai_naming = ai_commands::should_queue_naming(&state.db_path);
     let final_status = if queue_ai_naming {
@@ -301,7 +327,7 @@ pub async fn process_pdf(
         set_default_document_name(&state.db_path, document_id, &filename)?;
     }
     emit_progress(
-        &app,
+        &state,
         &filename,
         job_id,
         document_id,
@@ -315,6 +341,7 @@ pub async fn process_pdf(
         None,
         page_count,
     );
+    rag::indexing::queue_document_embedding(app.clone(), state.clone(), document_id);
 
     load_document_record(&state.db_path, document_id)
 }
@@ -515,35 +542,43 @@ pub fn update_document_stage(
     Ok(())
 }
 
-fn insert_page_record(
+fn replace_page_records(
     db_path: &Path,
     document_id: i64,
-    page: &ProcessedPage,
+    pages: &[ProcessedPage],
 ) -> Result<(), PipelineError> {
-    let connection = db::open_connection_at(db_path)?;
-    connection.execute(
-        "INSERT INTO pages(document_id, page_number, text, ocr_status, mean_confidence, width_px, height_px, dpi, rotation)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(document_id, page_number) DO UPDATE SET
-            text = excluded.text,
-            ocr_status = excluded.ocr_status,
-            mean_confidence = excluded.mean_confidence,
-            width_px = excluded.width_px,
-            height_px = excluded.height_px,
-            dpi = excluded.dpi,
-            rotation = excluded.rotation",
-        params![
-            document_id,
-            page.page_number,
-            page.text,
-            page.ocr_status,
-            page.mean_confidence,
-            page.width_px,
-            page.height_px,
-            page.dpi,
-            page.rotation,
-        ],
+    let mut connection = db::open_connection_at(db_path)?;
+    let transaction = connection.transaction()?;
+    let old_chunk_ids = {
+        let mut statement = transaction.prepare("SELECT id FROM chunks WHERE document_id = ?1")?;
+        let rows = statement.query_map(params![document_id], |row| row.get::<_, i64>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for chunk_id in old_chunk_ids {
+        transaction.execute("DELETE FROM chunks_vec WHERE rowid = ?1", params![chunk_id])?;
+    }
+    transaction.execute(
+        "DELETE FROM pages WHERE document_id = ?1",
+        params![document_id],
     )?;
+    for page in pages {
+        transaction.execute(
+            "INSERT INTO pages(document_id, page_number, text, ocr_status, mean_confidence, width_px, height_px, dpi, rotation)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                document_id,
+                page.page_number,
+                page.text,
+                page.ocr_status,
+                page.mean_confidence,
+                page.width_px,
+                page.height_px,
+                page.dpi,
+                page.rotation,
+            ],
+        )?;
+    }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -649,6 +684,20 @@ fn text_density(text: &str) -> usize {
         .count()
 }
 
+fn ensure_not_cancelled(cancel: &CancellationToken) -> Result<(), PipelineError> {
+    if cancel.is_cancelled() {
+        Err(PipelineError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn cleanup_partial_output(path: &Path) {
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+}
+
 fn map_pdfium_error(error: PdfiumError) -> PipelineError {
     match error {
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
@@ -688,7 +737,7 @@ fn page_progress(completed_pages: u16, total_pages: u16, within_page: f32) -> f3
 
 #[allow(clippy::too_many_arguments)]
 fn emit_progress(
-    app: &AppHandle,
+    state: &AppState,
     filename: &str,
     job_id: i64,
     document_id: i64,
@@ -698,34 +747,17 @@ fn emit_progress(
     page_number: Option<i64>,
     page_count: u16,
 ) {
-    let _ = app.emit(
-        "job.progress",
-        JobProgressPayload {
-            event_type: "job.progress",
-            job_id,
-            document_id,
-            filename: filename.to_string(),
-            stage: stage.to_string(),
-            progress_pct,
-            message: message.to_string(),
-            page_number,
-            page_count: page_count as i64,
-        },
-    );
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct JobProgressPayload {
-    #[serde(rename = "type")]
-    event_type: &'static str,
-    job_id: i64,
-    document_id: i64,
-    filename: String,
-    stage: String,
-    progress_pct: f32,
-    message: String,
-    page_number: Option<i64>,
-    page_count: i64,
+    state.progress.notify_progress(JobProgressUpdate {
+        job_id,
+        document_id,
+        filename: filename.to_string(),
+        stage: stage.to_string(),
+        progress_pct,
+        message: message.to_string(),
+        page_number,
+        page_count: page_count as i64,
+        eta_seconds: None,
+    });
 }
 
 #[derive(Debug)]

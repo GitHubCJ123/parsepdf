@@ -4,8 +4,9 @@ use anyhow::{anyhow, Context};
 use image::ImageFormat;
 use quick_xml::{events::Event, Reader};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 use tempfile::Builder;
+use tokio_util::sync::CancellationToken;
 
 use super::{BBoxPx, OcrAdapter, OcrBlock, OcrLine, OcrPage, OcrWord, TextDirection};
 
@@ -36,7 +37,11 @@ impl OcrAdapter for TesseractAdapter {
         image: &image::RgbaImage,
         page_index: u32,
         dpi: u32,
+        cancel: CancellationToken,
     ) -> anyhow::Result<OcrPage> {
+        if cancel.is_cancelled() {
+            return Err(anyhow!("OCR cancelled"));
+        }
         let input = Builder::new()
             .prefix("pdf-parser-page-")
             .suffix(".png")
@@ -64,7 +69,7 @@ impl OcrAdapter for TesseractAdapter {
             args.push(OsString::from(arg));
         }
 
-        let output = self
+        let command = self
             .app
             .shell()
             .sidecar("tesseract")
@@ -73,21 +78,42 @@ impl OcrAdapter for TesseractAdapter {
             .current_dir(&self.tessdata_prefix)
             .env("OMP_THREAD_LIMIT", "1")
             .env("TESSDATA_PREFIX", self.tessdata_prefix.join("tessdata"))
-            .set_raw_out(true)
-            .output()
-            .await
+            .set_raw_out(true);
+        let (mut rx, child) = command
+            .spawn()
             .context("failed to execute tesseract sidecar")?;
+        let mut child = Some(child);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut code = None;
 
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if !output.status.success() {
-            return Err(anyhow!(
-                "tesseract exited with code {:?}: {}",
-                output.status.code(),
-                stderr
-            ));
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    if let Some(child) = child.take() {
+                        let _ = child.kill();
+                    }
+                    return Err(anyhow!("OCR cancelled"));
+                }
+                event = rx.recv() => {
+                    let Some(event) = event else { break; };
+                    match event {
+                        CommandEvent::Stdout(bytes) => stdout.extend(bytes),
+                        CommandEvent::Stderr(bytes) => stderr.extend(bytes),
+                        CommandEvent::Terminated(payload) => code = payload.code,
+                        CommandEvent::Error(error) => stderr.extend(error.into_bytes()),
+                        _ => {}
+                    }
+                }
+            }
         }
 
-        let hocr = String::from_utf8(output.stdout).context("tesseract hOCR was not UTF-8")?;
+        let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
+        if code != Some(0) {
+            return Err(anyhow!("tesseract exited with code {:?}: {}", code, stderr));
+        }
+
+        let hocr = String::from_utf8(stdout).context("tesseract hOCR was not UTF-8")?;
         parse_hocr(&hocr, page_index, image.width(), image.height(), dpi)
     }
 }

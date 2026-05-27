@@ -40,6 +40,21 @@ pub struct NamingProposal {
     pub tokens_used: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatResponse {
+    pub content: String,
+    pub provider: String,
+    pub model: String,
+    pub tokens_in: Option<u32>,
+    pub tokens_out: Option<u32>,
+}
+
 #[derive(Debug, Error)]
 pub enum AiError {
     #[error("not configured")]
@@ -68,6 +83,11 @@ pub trait AiProvider: Send + Sync {
         text_sample: &str,
         original_filename: &str,
     ) -> Result<NamingProposal, AiError>;
+    async fn stream_chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        token_callback: Box<dyn Fn(String) + Send + Sync>,
+    ) -> Result<ChatResponse, AiError>;
     async fn health_check(&self) -> Result<(), AiError>;
 }
 
@@ -168,7 +188,7 @@ pub fn configured_provider(
     requested: Option<&str>,
 ) -> Result<DynProvider, AiError> {
     let provider = requested
-        .map(str::to_string)
+        .map(|value| value.split(':').next().unwrap_or(value).to_string())
         .or_else(|| setting(db_path, "ai.default_provider").ok().flatten())
         .unwrap_or_else(|| "none".to_string())
         .to_lowercase();

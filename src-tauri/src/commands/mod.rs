@@ -1,7 +1,10 @@
 pub mod ai;
 pub mod backfill;
+pub mod chat;
 pub mod database;
 pub mod engines;
+pub mod folders;
+pub mod jobs;
 pub mod library;
 pub mod process;
 pub mod search;
