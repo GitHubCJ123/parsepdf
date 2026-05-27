@@ -26,7 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "externalBin": ["binaries/tesseract/tesseract"],
     "resources": [
       "binaries/tesseract/*.dll",
