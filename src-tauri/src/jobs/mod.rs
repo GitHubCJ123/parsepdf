@@ -890,6 +890,10 @@ fn list_jobs(db_path: &Path, since: Option<i64>, limit: u32) -> Result<Vec<JobSu
          FROM jobs j
          LEFT JOIN documents d ON d.id = j.document_id
          WHERE (?1 IS NULL OR j.created_at >= ?1)
+           AND (
+             j.document_id IS NULL OR
+             j.id = (SELECT MAX(j2.id) FROM jobs j2 WHERE j2.document_id = j.document_id)
+           )
          ORDER BY j.created_at DESC, j.id DESC
          LIMIT ?2",
     )?;
@@ -1091,5 +1095,40 @@ mod tests {
             create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
         assert_eq!(doc1, doc2, "same document reused");
         assert_ne!(job1, job2, "new job created for legitimate reprocess");
+    }
+
+    #[test]
+    fn list_jobs_collapses_to_latest_job_per_document() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("collapse.pdf");
+        fs::write(&input_path, b"%PDF-1.4 collapse").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+
+        // First run completes.
+        let (doc, job1) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        conn.execute(
+            "UPDATE jobs SET status = 'done', finished_at = ?2 WHERE id = ?1",
+            params![job1, now_ts()],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Reprocess: this inserts a second jobs row for the same document.
+        let (doc_again, job2) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        assert_eq!(doc, doc_again);
+        assert_ne!(job1, job2);
+
+        // The list query should now collapse to ONE row (the latest job per document).
+        let listed = list_jobs(&db_path, None, 100).unwrap();
+        let for_doc: Vec<_> = listed.iter().filter(|s| s.document_id == Some(doc)).collect();
+        assert_eq!(
+            for_doc.len(),
+            1,
+            "list_jobs must return only the latest job per document"
+        );
+        assert_eq!(for_doc[0].id, job2, "latest job (job2) should be returned");
     }
 }

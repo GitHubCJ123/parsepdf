@@ -76,7 +76,7 @@ pub async fn ai_propose_names(
         upsert_pending_rename(&state.db_path, document_id, &proposal)
             .map_err(|error| error.to_string())?;
         let _ = app.emit(
-            "document.naming_ready",
+            "document:naming_ready",
             AppEventPayload::DocumentNamingReady {
                 document_id,
                 proposed_name: proposal.display_name.clone(),
@@ -114,7 +114,7 @@ pub fn queue_document_naming(app: AppHandle, state: AppState, document_id: i64) 
         match result {
             Ok(proposal) => {
                 let _ = app.emit(
-                    "document.naming_ready",
+                    "document:naming_ready",
                     AppEventPayload::DocumentNamingReady {
                         document_id,
                         proposed_name: proposal.display_name,
@@ -124,7 +124,7 @@ pub fn queue_document_naming(app: AppHandle, state: AppState, document_id: i64) 
             Err(_) => {
                 let _ = mark_naming_done_without_proposal(&state.db_path, document_id);
                 let _ = app.emit(
-                    "document.updated",
+                    "document:updated",
                     AppEventPayload::DocumentUpdated {
                         document_id,
                         status: "done".to_string(),

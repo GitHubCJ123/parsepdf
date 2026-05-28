@@ -678,9 +678,9 @@ struct WatcherErrorPayload {
 
 fn emit_watcher_error(app: &AppHandle, folder: &str, error: &str) {
     let _ = app.emit(
-        "watcher.error",
+        "watcher:error",
         WatcherErrorPayload {
-            event_type: "watcher.error",
+            event_type: "watcher:error",
             folder: folder.to_string(),
             error: error.to_string(),
         },

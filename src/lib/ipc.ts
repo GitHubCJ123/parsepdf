@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type JobProgressEvent = {
-  type: "job.progress";
+  type: "job:progress";
   job_id: number;
   document_id: number;
   filename: string;
@@ -41,20 +41,20 @@ export type DocumentRecord = {
 };
 
 export type JobFailedEvent = {
-  type: "job.failed";
+  type: "job:failed";
   job_id: number;
   document_id: number;
   error: string;
 };
 
 export type DocumentUpdatedEvent = {
-  type: "document.updated";
+  type: "document:updated";
   document_id: number;
   status: string;
 };
 
 export type WatcherErrorEvent = {
-  type: "watcher.error";
+  type: "watcher:error";
   folder: string;
   error: string;
 };
@@ -72,13 +72,13 @@ export type JobProgressUpdate = {
 };
 
 export type JobProgressBatchEvent = {
-  type: "job.progress.batch";
+  type: "job:progress:batch";
   updates: JobProgressUpdate[];
   ts: number;
 };
 
 export type JobLifecycleEvent = {
-  type: "job.lifecycle";
+  type: "job:lifecycle";
   job_id: number;
   document_id?: number | null;
   status: JobStatus;
@@ -124,7 +124,7 @@ export type FolderConfig = {
 };
 
 export type DocumentNamingReadyEvent = {
-  type: "document.naming_ready";
+  type: "document:naming_ready";
   document_id: number;
   proposed_name: string;
 };
@@ -361,7 +361,7 @@ export function setDefaultOcrEngine(engineId: string) {
 export function listenEngineInstallProgress(
   handler: (payload: EngineInstallProgressEvent) => void,
 ): Promise<UnlistenFn> {
-  return listen<EngineInstallProgressEvent>("engine.install.progress", (event) => {
+  return listen<EngineInstallProgressEvent>("engine:install:progress", (event) => {
     handler(event.payload);
   });
 }
@@ -504,13 +504,13 @@ export function chatSend(threadId: number | null, message: string, providerId: s
 }
 
 export function listenChatMessageStart(handler: (payload: ChatMessageStartEvent) => void): Promise<UnlistenFn> {
-  return listen<ChatMessageStartEvent>("chat.message.start", (event) => handler(event.payload));
+  return listen<ChatMessageStartEvent>("chat:message:start", (event) => handler(event.payload));
 }
 
 export function listenChatMessageToken(handler: (payload: ChatMessageTokenEvent) => void): Promise<UnlistenFn> {
-  return listen<ChatMessageTokenEvent>("chat.message.token", (event) => handler(event.payload));
+  return listen<ChatMessageTokenEvent>("chat:message:token", (event) => handler(event.payload));
 }
 
 export function listenChatMessageEnd(handler: (payload: ChatMessageEndEvent) => void): Promise<UnlistenFn> {
-  return listen<ChatMessageEndEvent>("chat.message.end", (event) => handler(event.payload));
+  return listen<ChatMessageEndEvent>("chat:message:end", (event) => handler(event.payload));
 }

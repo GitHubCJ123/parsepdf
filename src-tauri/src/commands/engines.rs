@@ -199,7 +199,7 @@ struct EngineRuntimeStatus {
 
 fn emit_install_progress(app: &AppHandle, engine_id: &str, progress: InstallProgress) {
     let _ = app.emit(
-        "engine.install.progress",
+        "engine:install:progress",
         EngineInstallProgressEvent {
             engine_id: engine_id.to_string(),
             phase: progress.phase,

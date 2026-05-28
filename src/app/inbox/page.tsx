@@ -50,6 +50,29 @@ type BannerState = {
 const ITEM_HEIGHT = 76;
 const LIST_HEIGHT = 460;
 
+// Module-level dedup map. Survives React StrictMode double-mount and component
+// re-renders, which a useRef cannot do. Keyed by absolute path; value is the
+// epoch-ms timestamp of the last invoke attempt.
+const inFlightPathDedup = new Map<string, number>();
+const INFLIGHT_WINDOW_MS = 1500;
+
+function shouldSkipDuplicate(path: string): boolean {
+  const now = Date.now();
+  const last = inFlightPathDedup.get(path);
+  if (last !== undefined && now - last < INFLIGHT_WINDOW_MS) return true;
+  inFlightPathDedup.set(path, now);
+  return false;
+}
+
+function clearDuplicateMark(path: string) {
+  window.setTimeout(() => {
+    const last = inFlightPathDedup.get(path);
+    if (last !== undefined && Date.now() - last >= INFLIGHT_WINDOW_MS) {
+      inFlightPathDedup.delete(path);
+    }
+  }, 5000);
+}
+
 export function InboxPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
@@ -62,7 +85,6 @@ export function InboxPage() {
   const defaultEngineId = engines.find((engine) => engine.is_default)?.id ?? "tesseract";
   const [selectedEngineId, setSelectedEngineId] = useState(defaultEngineId);
   const refreshInFlight = useRef(false);
-  const inFlightPaths = useRef<Map<string, number>>(new Map());
 
   const refreshJobs = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -87,16 +109,16 @@ export function InboxPage() {
 
   useEffect(() => {
     let disposed = false;
-    const progress = listenAppEvent("job.progress.batch", (payload: JobProgressBatchEvent) => {
+    const progress = listenAppEvent("job:progress:batch", (payload: JobProgressBatchEvent) => {
       if (!disposed) setJobs((current) => applyProgressBatch(current, payload.updates));
     });
-    const lifecycle = listenAppEvent("job.lifecycle", (payload: JobLifecycleEvent) => {
+    const lifecycle = listenAppEvent("job:lifecycle", (payload: JobLifecycleEvent) => {
       if (!disposed) {
         setJobs((current) => patchLifecycle(current, payload));
         if (payload.status === "error") void refreshJobs();
       }
     });
-    const watcher = listenAppEvent("watcher.error", (payload: WatcherErrorEvent) => {
+    const watcher = listenAppEvent("watcher:error", (payload: WatcherErrorEvent) => {
       if (!disposed) addBanner({ id: `watcher-${Date.now()}`, severity: "error", title: "Watched folder access lost", message: payload.folder, details: payload.error });
     });
     return () => {
@@ -129,11 +151,11 @@ export function InboxPage() {
   const visibleJobs = filteredJobs.slice(visibleStart, visibleEnd);
 
   const processPath = useCallback(async (path: string) => {
+    if (shouldSkipDuplicate(path)) {
+      console.debug("[inbox] skipped duplicate invoke for", path);
+      return;
+    }
     const engineId = selectedEngineId;
-    const now = Date.now();
-    const last = inFlightPaths.current.get(path);
-    if (last !== undefined && now - last < 1500) return;
-    inFlightPaths.current.set(path, now);
     try {
       const queued = await processPdf(path, engineId);
       setJobs((current) => mergeJobRows(current, [queued]));
@@ -142,7 +164,7 @@ export function InboxPage() {
     } catch (error) {
       addBanner({ id: `manual-${Date.now()}`, severity: "error", title: "PDF could not be queued", message: basename(path), details: error instanceof Error ? error.message : String(error) });
     } finally {
-      window.setTimeout(() => inFlightPaths.current.delete(path), 5000);
+      clearDuplicateMark(path);
     }
   }, [selectedEngineId]);
 
@@ -153,8 +175,14 @@ export function InboxPage() {
       if (payload.type === "leave") setIsDragging(false);
       if (payload.type === "drop") {
         setIsDragging(false);
-        for (const path of payload.paths ?? []) {
-          if (path.toLowerCase().endsWith(".pdf")) void processPath(path);
+        const paths = payload.paths ?? [];
+        console.debug("[inbox] drop event paths=", paths);
+        const seen = new Set<string>();
+        for (const path of paths) {
+          if (!path.toLowerCase().endsWith(".pdf")) continue;
+          if (seen.has(path)) continue;
+          seen.add(path);
+          void processPath(path);
         }
       }
     });

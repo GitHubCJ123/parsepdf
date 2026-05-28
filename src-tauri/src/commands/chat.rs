@@ -128,7 +128,7 @@ pub async fn chat_send(
         create_message_pair(&state.db_path, thread_id, &message, &provider_id)
             .map_err(|error| error.to_string())?;
     app.emit(
-        "chat.message.start",
+        "chat:message:start",
         ChatMessageStartEvent {
             id: assistant_message_id,
             thread_id,
@@ -152,7 +152,7 @@ pub async fn chat_send(
     let (content, provider_label, tokens_in, tokens_out, citation_refs) = if chunks.is_empty() {
         let content = "I couldn't find that in your library.".to_string();
         app.emit(
-            "chat.message.token",
+            "chat:message:token",
             ChatMessageTokenEvent {
                 id: assistant_message_id,
                 delta: content.clone(),
@@ -174,7 +174,7 @@ pub async fn chat_send(
                 messages,
                 Box::new(move |delta| {
                     let _ = token_app.emit(
-                        "chat.message.token",
+                        "chat:message:token",
                         ChatMessageTokenEvent {
                             id: assistant_message_id,
                             delta,
@@ -213,7 +213,7 @@ pub async fn chat_send(
     )
     .map_err(|error| error.to_string())?;
     app.emit(
-        "chat.message.end",
+        "chat:message:end",
         ChatMessageEndEvent {
             id: assistant_message_id,
             thread_id,

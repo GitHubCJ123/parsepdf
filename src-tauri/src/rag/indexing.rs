@@ -78,7 +78,7 @@ pub fn queue_document_embedding(app: AppHandle, state: AppState, document_id: i6
                     "Embeddings indexed",
                 );
                 let _ = app.emit(
-                    "document.updated",
+                    "document:updated",
                     AppEventPayload::DocumentUpdated {
                         document_id,
                         status: "embedded".to_string(),
@@ -97,9 +97,9 @@ pub fn queue_document_embedding(app: AppHandle, state: AppState, document_id: i6
                 let message = error.to_string();
                 let _ = finish_job(&state.db_path, job_id, "error", Some(&message));
                 let _ = app.emit(
-                    "job.failed",
+                    "job:failed",
                     EmbedJobFailedEvent {
-                        event_type: "job.failed",
+                        event_type: "job:failed",
                         job_id,
                         document_id,
                         error: message.clone(),
@@ -298,9 +298,9 @@ fn emit_progress(
     message: &str,
 ) {
     let _ = app.emit(
-        "job.progress",
+        "job:progress",
         EmbedJobProgressEvent {
-            event_type: "job.progress",
+            event_type: "job:progress",
             job_id,
             document_id,
             filename: filename.to_string(),

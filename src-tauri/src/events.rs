@@ -39,7 +39,7 @@ impl ProgressAggregator {
     }
 
     pub fn notify_lifecycle(&self, event: JobLifecycle) {
-        let _ = self.app_handle.emit("job.lifecycle", event);
+        let _ = self.app_handle.emit("job:lifecycle", event);
     }
 
     fn spawn_flush_loop(&self) {
@@ -69,9 +69,9 @@ impl ProgressAggregator {
                 .collect::<Vec<_>>()
         };
         let _ = self.app_handle.emit(
-            "job.progress.batch",
+            "job:progress:batch",
             JobProgressBatch {
-                event_type: "job.progress.batch".to_string(),
+                event_type: "job:progress:batch".to_string(),
                 updates,
                 ts: now_ts(),
             },
@@ -119,7 +119,7 @@ impl JobLifecycle {
         message: Option<String>,
     ) -> Self {
         Self {
-            event_type: "job.lifecycle".to_string(),
+            event_type: "job:lifecycle".to_string(),
             job_id,
             document_id,
             status: status.to_string(),
@@ -132,7 +132,7 @@ impl JobLifecycle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AppEventPayload {
-    #[serde(rename = "job.progress")]
+    #[serde(rename = "job:progress")]
     JobProgress {
         job_id: i64,
         document_id: i64,
@@ -143,18 +143,18 @@ pub enum AppEventPayload {
         page_number: Option<i64>,
         page_count: i64,
     },
-    #[serde(rename = "job.progress.batch")]
+    #[serde(rename = "job:progress:batch")]
     JobProgressBatch {
         updates: Vec<JobProgressUpdate>,
         ts: i64,
     },
-    #[serde(rename = "job.failed")]
+    #[serde(rename = "job:failed")]
     JobFailed {
         job_id: i64,
         document_id: i64,
         error: String,
     },
-    #[serde(rename = "job.lifecycle")]
+    #[serde(rename = "job:lifecycle")]
     JobLifecycle {
         job_id: i64,
         document_id: Option<i64>,
@@ -162,14 +162,14 @@ pub enum AppEventPayload {
         message: Option<String>,
         ts: i64,
     },
-    #[serde(rename = "document.updated")]
+    #[serde(rename = "document:updated")]
     DocumentUpdated { document_id: i64, status: String },
-    #[serde(rename = "document.naming_ready")]
+    #[serde(rename = "document:naming_ready")]
     DocumentNamingReady {
         document_id: i64,
         proposed_name: String,
     },
-    #[serde(rename = "watcher.error")]
+    #[serde(rename = "watcher:error")]
     WatcherError { folder: String, error: String },
 }
 
