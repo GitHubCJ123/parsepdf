@@ -236,8 +236,8 @@ fn count_chunks(db_path: &Path, document_id: i64) -> Result<usize, IndexError> {
 fn create_embed_job(db_path: &Path, document_id: i64) -> Result<i64, rusqlite::Error> {
     let connection = db::open_connection_at(db_path).map_err(db_error_to_rusqlite)?;
     connection.execute(
-        "INSERT INTO jobs(document_id, kind, status, created_at)
-         VALUES(?1, 'embed', 'queued', ?2)",
+        "INSERT INTO jobs(document_id, kind, status, created_at, origin)
+         VALUES(?1, 'embed', 'queued', ?2, 'system')",
         params![document_id, now_ts()],
     )?;
     Ok(connection.last_insert_rowid())

@@ -918,9 +918,10 @@ fn list_jobs(db_path: &Path, since: Option<i64>, limit: u32) -> Result<Vec<JobSu
          FROM jobs j
          LEFT JOIN documents d ON d.id = j.document_id
          WHERE (?1 IS NULL OR j.created_at >= ?1)
+           AND j.kind = 'ingest'
            AND (
              j.document_id IS NULL OR
-             j.id = (SELECT MAX(j2.id) FROM jobs j2 WHERE j2.document_id = j.document_id)
+             j.id = (SELECT MAX(j2.id) FROM jobs j2 WHERE j2.document_id = j.document_id AND j2.kind = 'ingest')
            )
          ORDER BY j.created_at DESC, j.id DESC
          LIMIT ?2",
@@ -1158,5 +1159,45 @@ mod tests {
             "list_jobs must return only the latest job per document"
         );
         assert_eq!(for_doc[0].id, job2, "latest job (job2) should be returned");
+    }
+
+    #[test]
+    fn list_jobs_excludes_embed_jobs_from_inbox_queue() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("rag.pdf");
+        fs::write(&input_path, b"%PDF-1.4 rag").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+
+        let (doc, ingest_job) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, Some("tesseract")).unwrap();
+        // Simulate the RAG indexing pipeline inserting an 'embed' job after OCR.
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO jobs(document_id, kind, status, created_at, origin)
+             VALUES(?1, 'embed', 'queued', ?2, 'system')",
+            params![doc, now_ts()],
+        )
+        .unwrap();
+        let total_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM jobs WHERE document_id = ?1",
+                params![doc],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total_rows, 2, "test fixture should have both ingest and embed rows");
+        drop(conn);
+
+        let listed = list_jobs(&db_path, None, 100).unwrap();
+        let for_doc: Vec<_> = listed.iter().filter(|s| s.document_id == Some(doc)).collect();
+        assert_eq!(
+            for_doc.len(),
+            1,
+            "inbox queue must show only the ingest job, not the embed job"
+        );
+        assert_eq!(
+            for_doc[0].id, ingest_job,
+            "inbox queue must show the ingest job (not the embed one)"
+        );
     }
 }
