@@ -62,6 +62,7 @@ export function InboxPage() {
   const defaultEngineId = engines.find((engine) => engine.is_default)?.id ?? "tesseract";
   const [selectedEngineId, setSelectedEngineId] = useState(defaultEngineId);
   const refreshInFlight = useRef(false);
+  const inFlightPaths = useRef<Map<string, number>>(new Map());
 
   const refreshJobs = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -129,6 +130,10 @@ export function InboxPage() {
 
   const processPath = useCallback(async (path: string) => {
     const engineId = selectedEngineId;
+    const now = Date.now();
+    const last = inFlightPaths.current.get(path);
+    if (last !== undefined && now - last < 1500) return;
+    inFlightPaths.current.set(path, now);
     try {
       const queued = await processPdf(path, engineId);
       setJobs((current) => mergeJobRows(current, [queued]));
@@ -136,6 +141,8 @@ export function InboxPage() {
       notifySuccess("Queued for OCR.");
     } catch (error) {
       addBanner({ id: `manual-${Date.now()}`, severity: "error", title: "PDF could not be queued", message: basename(path), details: error instanceof Error ? error.message : String(error) });
+    } finally {
+      window.setTimeout(() => inFlightPaths.current.delete(path), 5000);
     }
   }, [selectedEngineId]);
 

@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -516,15 +517,35 @@ fn create_queued_job(
     let now = now_ts();
     let original_path = input_path.to_string_lossy().into_owned();
 
-    let document_id = transaction
+    let existing = transaction
         .query_row(
-            "SELECT id FROM documents WHERE sha256 = ?1",
+            "SELECT id, output_path FROM documents WHERE sha256 = ?1",
             params![sha256],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
 
-    let document_id = if let Some(document_id) = document_id {
+    if let Some((existing_doc_id, _)) = &existing {
+        let active_job_id = transaction
+            .query_row(
+                "SELECT id FROM jobs
+                 WHERE document_id = ?1 AND status IN ('queued', 'running', 'paused')
+                 ORDER BY created_at DESC LIMIT 1",
+                params![existing_doc_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(job_id) = active_job_id {
+            transaction.commit()?;
+            info!(
+                document_id = *existing_doc_id,
+                job_id, "active job already exists for this PDF; returning existing job"
+            );
+            return Ok((*existing_doc_id, job_id));
+        }
+    }
+
+    let (document_id, previous_output_path) = if let Some((document_id, output_path)) = existing {
         transaction.execute(
             "UPDATE documents
              SET original_path = ?2,
@@ -558,14 +579,14 @@ fn create_queued_job(
             "DELETE FROM pending_renames WHERE document_id = ?1",
             params![document_id],
         )?;
-        document_id
+        (document_id, output_path)
     } else {
         transaction.execute(
             "INSERT INTO documents(sha256, original_path, page_count, status, ingested_at, updated_at)
              VALUES(?1, ?2, 0, 'queued', ?3, ?3)",
             params![sha256, original_path, now],
         )?;
-        transaction.last_insert_rowid()
+        (transaction.last_insert_rowid(), None)
     };
 
     transaction.execute(
@@ -575,6 +596,25 @@ fn create_queued_job(
     )?;
     let job_id = transaction.last_insert_rowid();
     transaction.commit()?;
+
+    if let Some(path) = previous_output_path {
+        let path = PathBuf::from(path);
+        match fs::remove_file(&path) {
+            Ok(()) => info!(
+                document_id,
+                path = %path.display(),
+                "removed previous output PDF before reprocess"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(
+                document_id,
+                path = %path.display(),
+                error = %error,
+                "failed to remove previous output PDF before reprocess"
+            ),
+        }
+    }
+
     Ok((document_id, job_id))
 }
 
@@ -930,5 +970,126 @@ mod tests {
             .expect("mock job timed out")
             .expect("mock job join failed");
         assert_eq!(status, JobStatus::Cancelled);
+    }
+
+    fn fixture_db() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("jobs-test.db");
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        conn.execute_batch(include_str!("../../migrations/001_initial.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../../migrations/003_phase2.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../../migrations/004_phase3.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../../migrations/006_phase4.sql"))
+            .unwrap();
+        drop(conn);
+        (temp, db_path)
+    }
+
+    #[test]
+    fn reprocess_deletes_previous_output_file() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("input.pdf");
+        fs::write(&input_path, b"%PDF-1.4 test bytes").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+        let stale_output = temp.path().join("stale-output.pdf");
+        fs::write(&stale_output, b"previous searchable PDF").unwrap();
+
+        // Seed an existing document for this SHA256 with output_path pointing at the stale file
+        let sha = pdf_pipeline::compute_sha256(&input_path).unwrap();
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO documents(sha256, original_path, output_path, page_count, status, ingested_at, updated_at)
+             VALUES(?1, ?2, ?3, 0, 'done', 1, 1)",
+            params![sha, input_path.to_string_lossy(), stale_output.to_string_lossy()],
+        ).unwrap();
+        let pre_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .unwrap();
+        drop(conn);
+
+        assert_eq!(pre_count, 1);
+        assert!(stale_output.exists());
+
+        let (_doc_id, _job_id) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+
+        // The stale output file must be gone, and the document row must have been reused (not duplicated).
+        assert!(
+            !stale_output.exists(),
+            "stale output PDF should have been removed on reprocess"
+        );
+
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        let post_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(post_count, 1, "should reuse the existing document row");
+    }
+
+    #[test]
+    fn fresh_ingest_succeeds_without_previous_output() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("fresh.pdf");
+        fs::write(&input_path, b"%PDF-1.4 fresh").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+
+        let (doc_id, job_id) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        assert!(doc_id > 0);
+        assert!(job_id > 0);
+    }
+
+    #[test]
+    fn second_call_returns_existing_active_job_instead_of_creating_duplicate() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("dup.pdf");
+        fs::write(&input_path, b"%PDF-1.4 dup").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+
+        let (doc1, job1) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        // Second call before the first job has finished must return the same job_id.
+        let (doc2, job2) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        assert_eq!(doc1, doc2);
+        assert_eq!(job1, job2, "duplicate ingest must reuse the active job");
+
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        let job_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM jobs WHERE document_id = ?1",
+                params![doc1],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(job_count, 1, "should not have inserted a duplicate job row");
+    }
+
+    #[test]
+    fn new_job_created_after_previous_one_is_done() {
+        let (temp, db_path) = fixture_db();
+        let input_path = temp.path().join("reprocess.pdf");
+        fs::write(&input_path, b"%PDF-1.4 reprocess").unwrap();
+        let input_path = input_path.canonicalize().unwrap();
+
+        let (doc1, job1) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+
+        // Mark the first job as done.
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        conn.execute(
+            "UPDATE jobs SET status = 'done', finished_at = ?2 WHERE id = ?1",
+            params![job1, now_ts()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let (doc2, job2) =
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+        assert_eq!(doc1, doc2, "same document reused");
+        assert_ne!(job1, job2, "new job created for legitimate reprocess");
     }
 }
