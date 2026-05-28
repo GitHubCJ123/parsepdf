@@ -1,11 +1,14 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Eye, EyeOff, FolderOpen, FolderPlus, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, FolderOpen, FolderPlus, Info, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { AboutDialog } from "@/components/about-dialog";
+import { EmptyState } from "@/components/empty-state";
 import { EngineSelector } from "@/components/engine-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { aiHealthCheck, aiListModels, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, watcherAddFolder, watcherListFolders, watcherRemoveFolder, watcherScanNow, watcherSetEnabled, type EngineInfo, type FolderConfig } from "@/lib/ipc";
 import { getSetting, setSetting } from "@/lib/db";
+import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const OPENROUTER_MODELS = [
@@ -39,6 +42,7 @@ export function SettingsPage() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [folders, setFolders] = useState<FolderConfig[]>([]);
   const [foldersMessage, setFoldersMessage] = useState("");
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +87,7 @@ export function SettingsPage() {
       setOutputDir(selected);
       await setSetting("output_dir", selected);
       setSettingsMessage("Output folder saved.");
+      notifySuccess("Output folder saved.");
     }
   }
 
@@ -100,6 +105,7 @@ export function SettingsPage() {
       const folder = await watcherAddFolder(selected, true);
       setFolders((current) => [folder, ...current.filter((item) => item.path !== folder.path)]);
       setFoldersMessage("Watched folder added.");
+      notifySuccess("Watched folder added.");
       await refreshFolders();
     }
   }
@@ -124,6 +130,7 @@ export function SettingsPage() {
     await watcherRemoveFolder(folder.path);
     setFolders((current) => current.filter((item) => item.path !== folder.path));
     setFoldersMessage("Watched folder removed.");
+    notifySuccess("Watched folder removed.");
   }
 
   async function saveOpenRouter() {
@@ -195,7 +202,7 @@ export function SettingsPage() {
   const sections = useMemo(
     () => [
       ["ocr", "OCR"],
-      ["ai", "AI Providers"],
+      ["ai", "AI providers"],
       ["folders", "Folders"],
       ["library", "Library"],
       ["appearance", "Appearance"],
@@ -210,6 +217,15 @@ export function SettingsPage() {
       void refreshFolders();
     }
   }, [activeSection]);
+
+  useEffect(() => {
+    const setSection = (event: Event) => {
+      const section = (event as CustomEvent<string>).detail;
+      if (section) setActiveSection(section);
+    };
+    window.addEventListener("pdf-parser:settings-section", setSection);
+    return () => window.removeEventListener("pdf-parser:settings-section", setSection);
+  }, []);
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[13rem_1fr]">
@@ -245,11 +261,20 @@ export function SettingsPage() {
           </div>
         </header>
 
+        <section className="rounded-xl border border-border bg-card/70 p-4">
+          <h2 className="text-sm font-medium text-foreground">Get started</h2>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-muted-foreground">
+            <li>Choose an output folder (currently default).</li>
+            <li>Optional: configure an AI provider.</li>
+            <li>Optional: add a watched folder.</li>
+          </ol>
+        </section>
+
         {activeSection === "ocr" && (
           <SettingsCard title="OCR" eyebrow="Local text layer">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2">
-                <span className="text-sm font-medium">OCR Engine</span>
+                <span className="text-sm font-medium">OCR engine</span>
                 <select
                   className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm"
                   disabled={enginesLoading}
@@ -265,14 +290,15 @@ export function SettingsPage() {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-muted-foreground">Phase 6 can add RapidOCR here without changing the layout.</p>
+                <p className="text-xs text-muted-foreground">Install RapidOCR here when higher-accuracy OCR is needed.</p>
               </label>
               <label className="space-y-2">
                 <span className="text-sm font-medium">Output folder</span>
                 <div className="flex gap-2">
                   <Input value={outputDir} onChange={(event) => setOutputDir(event.target.value)} onBlur={() => void setSetting("output_dir", outputDir)} />
-                  <Button type="button" variant="outline" onClick={() => void chooseOutputDir()}>
+                  <Button type="button" variant="outline" onClick={() => void chooseOutputDir()} aria-label="Choose folder">
                     <FolderOpen className="size-4" />
+                    Choose folder
                   </Button>
                 </div>
               </label>
@@ -283,7 +309,7 @@ export function SettingsPage() {
         )}
 
         {activeSection === "ai" && (
-          <SettingsCard title="AI Providers" eyebrow="Review before rename">
+          <SettingsCard title="AI providers" eyebrow="Review before rename">
             <div className="rounded-lg border border-border bg-background/45 p-4 text-sm leading-6 text-muted-foreground">
               OpenRouter sends document text to a cloud API (paid). Ollama runs entirely on your machine (free, offline). API keys are stored in Stronghold; if the keychain is unavailable, cloud AI is disabled rather than saved as plaintext.
             </div>
@@ -308,7 +334,7 @@ export function SettingsPage() {
                   <span className="text-sm font-medium">API key</span>
                   <div className="flex gap-2">
                     <Input type={showOpenRouterKey ? "text" : "password"} value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="sk-or-v1-…" />
-                    <Button type="button" variant="outline" onClick={() => setShowOpenRouterKey((shown) => !shown)}>
+                    <Button type="button" variant="outline" onClick={() => setShowOpenRouterKey((shown) => !shown)} aria-label={showOpenRouterKey ? "Hide API key" : "Show API key"}>
                       {showOpenRouterKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </Button>
                   </div>
@@ -365,10 +391,21 @@ export function SettingsPage() {
             onRemove={(folder) => void removeWatchedFolder(folder)}
           />
         )}
-        {activeSection === "library" && <Stub title="Library defaults" text="Phase 2 adds browsing, preview, review, delete, and copy-path actions in the Library panel." />}
-        {activeSection === "appearance" && <Stub title="Appearance" text="Dark refined mode is locked for now. Theme options are reserved for polish." />}
-        {activeSection === "updates" && <Stub title="Updates" text="The Phase 7 updater checks signed GitHub release artifacts and prepares installs on quit." />}
-        {activeSection === "about" && <Stub title="About PDF-Parser" text="Local-first OCR, optional AI naming, SQLite search, and a Windows-native Tauri shell." />}
+        {activeSection === "library" && <Stub title="Library defaults" text="Review, preview, delete, and copy-path actions live in the Library panel." />}
+        {activeSection === "appearance" && <Stub title="Appearance" text="Dark mode is locked for v0.1.0. Theme options are reserved for a later release." />}
+        {activeSection === "updates" && <Stub title="Updates" text="The updater checks signed GitHub release artifacts and prepares installs on quit." />}
+        {activeSection === "about" && (
+          <SettingsCard title="About" eyebrow="Version and logs">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background/45 p-4">
+              <div>
+                <h3 className="font-medium text-foreground">PDF-Parser</h3>
+                <p className="mt-1 text-sm text-muted-foreground">Open app details, folders, updates, and logs.</p>
+              </div>
+              <Button type="button" onClick={() => setAboutOpen(true)}><Info className="size-4" />Open about</Button>
+            </div>
+          </SettingsCard>
+        )}
+        <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       </main>
     </div>
   );
@@ -455,7 +492,7 @@ function FoldersSection({
       </div>
 
       {folders.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border bg-background/35 p-6 text-sm text-muted-foreground">No watched folders. Add one to auto-process PDFs.</div>
+        <EmptyState icon={FolderPlus} title="No watched folders" description="Watch a folder to auto-process new PDFs." actionLabel="Add folder" onAction={onAdd} className="min-h-64 rounded-lg border border-dashed border-border bg-background/35" />
       ) : (
         <div className="space-y-3">
           {folders.map((folder) => {
@@ -502,7 +539,7 @@ function SettingsCard({ title, eyebrow, children }: { title: string; eyebrow: st
 
 function Stub({ title, text }: { title: string; text: string }) {
   return (
-    <SettingsCard title={title} eyebrow="Phase 2 stub">
+    <SettingsCard title={title} eyebrow="Settings">
       <div className="rounded-lg border border-dashed border-border bg-background/35 p-6 text-sm text-muted-foreground">{text}</div>
     </SettingsCard>
   );

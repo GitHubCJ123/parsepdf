@@ -1,0 +1,270 @@
+
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { Document, Page, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
+import { Copy, ExternalLink, Loader2, Search, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { format } from "date-fns";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { type DocumentDetail, type SearchHit, searchDocument } from "@/lib/ipc";
+import { notifyError, notifySuccess } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+
+type PdfPreviewDrawerProps = {
+  detail: DocumentDetail | null;
+  loading: boolean;
+  initialPage: number;
+  onClose: () => void;
+  onDelete?: (documentId: number) => Promise<void>;
+  eyebrow?: string;
+  citation?: ReactNode;
+};
+
+type ZoomMode = number | "fit";
+
+export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDelete, eyebrow = "Preview drawer", citation }: PdfPreviewDrawerProps) {
+  const document = detail?.document ?? null;
+  const pageCount = Math.max(1, document?.page_count ?? 1);
+  const [page, setPage] = useState(clampPage(initialPage, pageCount));
+  const [pageInput, setPageInput] = useState(String(clampPage(initialPage, pageCount)));
+  const [zoom, setZoom] = useState<ZoomMode>("fit");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState(760);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const next = clampPage(initialPage, pageCount);
+    setPage(next);
+    setPageInput(String(next));
+  }, [document?.id, initialPage, pageCount]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const parsed = Number.parseInt(pageInput, 10);
+      if (Number.isFinite(parsed)) setPage(clampPage(parsed, pageCount));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [pageInput, pageCount]);
+
+  useEffect(() => {
+    if (!viewportRef.current) return;
+    const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+    observer.observe(viewportRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const trimmed = searchQuery.trim();
+    if (!document || !trimmed) {
+      setSearchHits([]);
+      setSearchError(null);
+      setSearching(false);
+      return;
+    }
+    const timeout = window.setTimeout(async () => {
+      setSearching(true);
+      setSearchError(null);
+      try {
+        const hits = await searchDocument(document.id, trimmed);
+        if (!cancelled) setSearchHits(hits);
+      } catch (error) {
+        if (!cancelled) {
+          setSearchHits([]);
+          setSearchError(String(error));
+        }
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [document, searchQuery]);
+
+  const pdfUrl = document?.output_path ? convertFileSrc(document.output_path) : null;
+  const visibleHit = searchHits.find((hit) => hit.page_number === page);
+  const terms = useMemo(() => searchTerms(searchQuery), [searchQuery]);
+  const renderWidth = zoom === "fit" ? Math.max(320, Math.min(containerWidth - 32, 880)) : undefined;
+
+  async function openExternal() {
+    if (!document?.output_path) return;
+    try {
+      await openPath(document.output_path);
+    } catch (error) {
+      notifyError(`PDF could not be opened. ${String(error)}`);
+    }
+  }
+
+  async function copyPath() {
+    if (!document?.output_path) return;
+    await navigator.clipboard.writeText(document.output_path);
+    notifySuccess("Path copied.");
+  }
+
+  return (
+    <Dialog open={Boolean(detail || loading)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent showCloseButton={false} className="left-auto right-0 top-0 flex h-dvh w-full max-w-3xl translate-x-0 translate-y-0 grid-rows-none flex-col gap-0 rounded-none border-y-0 border-r-0 border-border bg-background/95 p-0 shadow-2xl shadow-black/50 backdrop-blur-xl sm:max-w-3xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
+          <div className="min-w-0">
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{eyebrow}</p>
+            <h2 className="mt-1 truncate text-xl font-semibold tracking-[-0.04em]">{document?.display_name ?? "Loading"}</h2>
+            {document?.ai_summary ? <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{document.ai_summary}</p> : null}
+          </div>
+          <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close preview"><X className="size-4" /></Button>
+        </div>
+
+        {loading || !document ? (
+          <div className="grid flex-1 place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
+        ) : (
+          <>
+            <div className="grid gap-3 border-b border-border p-4 text-xs text-muted-foreground sm:grid-cols-2">
+              <Meta label="Original" value={document.original_name} />
+              <Meta label="Pages" value={String(document.page_count)} />
+              <Meta label="OCR" value={document.ocr_engine ?? "—"} />
+              <Meta label="AI" value={document.ai_provider ?? "none"} />
+              <Meta label="Ingested" value={formatDate(document.ingested_at)} />
+              <Meta label="Size" value={formatBytes(document.size_bytes)} />
+              <Meta label="Output" value={document.output_path ?? "—"} wide />
+              <Meta label="Original path" value={document.original_path} wide />
+            </div>
+
+            {citation ? <div className="border-b border-border bg-emerald-300/5 p-4">{citation}</div> : null}
+
+            <div className="space-y-3 border-b border-border p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>Page</span>
+                  <Input type="number" min={1} max={pageCount} value={pageInput} onChange={(event) => setPageInput(event.target.value)} className="h-8 w-20" aria-label={`Page ${page} of ${pageCount}`} />
+                  <span>of {pageCount}</span>
+                </label>
+                <div className="ml-auto flex flex-wrap items-center gap-1">
+                  <Button type="button" size="sm" variant="outline" disabled={page <= 1} onClick={() => { const next = page - 1; setPage(next); setPageInput(String(next)); }}>Prev</Button>
+                  <Button type="button" size="sm" variant="outline" disabled={page >= pageCount} onClick={() => { const next = page + 1; setPage(next); setPageInput(String(next)); }}>Next</Button>
+                  <Button type="button" size="icon-sm" variant="outline" onClick={() => setZoom((value) => typeof value === "number" ? Math.max(0.5, value - 0.15) : 0.85)} aria-label="Zoom out"><ZoomOut className="size-4" /></Button>
+                  <Button type="button" size="icon-sm" variant="outline" onClick={() => setZoom((value) => typeof value === "number" ? Math.min(2.5, value + 0.15) : 1.15)} aria-label="Zoom in"><ZoomIn className="size-4" /></Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setZoom("fit")}>Fit</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setZoom(1)}>100%</Button>
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-[1fr_auto] md:items-start">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                  <Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search within document" className="pl-8" />
+                </div>
+                <div className="text-xs text-muted-foreground md:pt-2">
+                  {searching ? "Searching" : searchQuery.trim() ? `${searchHits.length} match${searchHits.length === 1 ? "" : "es"}` : ""}
+                </div>
+              </div>
+              {searchError ? <p className="text-xs text-destructive">Search failed. Try different words.</p> : null}
+              {visibleHit ? <Snippet html={visibleHit.snippet_html} /> : null}
+              {searchHits.length > 0 ? (
+                <div className="flex gap-1 overflow-x-auto pb-1">
+                  {searchHits.slice(0, 24).map((hit) => (
+                    <button key={hit.page_id} type="button" onClick={() => { setPage(hit.page_number); setPageInput(String(hit.page_number)); }} className={cn("rounded border px-2 py-1 font-mono text-[11px] text-muted-foreground", hit.page_number === page && "border-foreground/30 bg-secondary text-foreground")}>p.{hit.page_number}</button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div ref={viewportRef} className="min-h-0 flex-1 overflow-auto bg-black/25 p-4">
+              {pdfUrl ? (
+                <div className="mx-auto w-fit max-w-full">
+                  <Document file={pdfUrl} loading={<PreviewLoader />} error={<PreviewError />}>
+                    <Page
+                      pageNumber={page}
+                      renderAnnotationLayer
+                      renderTextLayer
+                      width={renderWidth}
+                      scale={zoom === "fit" ? undefined : zoom}
+                      customTextRenderer={({ str }: { str: string }) => highlightText(str, terms)}
+                      loading={<PreviewLoader />}
+                    />
+                  </Document>
+                </div>
+              ) : (
+                <div className="grid h-full place-items-center text-sm text-muted-foreground">No output PDF path recorded.</div>
+              )}
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-4">
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={() => void openExternal()} disabled={!document.output_path}><ExternalLink className="size-4" />Open externally</Button>
+                <Button type="button" variant="outline" onClick={() => void copyPath()} disabled={!document.output_path}><Copy className="size-4" />Copy path</Button>
+              </div>
+              {onDelete ? <Button type="button" variant="destructive" onClick={() => void onDelete(document.id)}><Trash2 className="size-4" />Delete</Button> : null}
+            </footer>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewLoader() {
+  return <div className="grid h-96 place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
+}
+
+function PreviewError() {
+  return <div className="grid h-96 place-items-center rounded-lg border border-border bg-background p-6 text-sm text-muted-foreground">Preview could not load. Open the PDF externally.</div>;
+}
+
+function Snippet({ html }: { html: string }) {
+  return <div className="rounded-lg border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground [&_mark]:rounded [&_mark]:bg-amber-400/25 [&_mark]:px-0.5 [&_mark]:text-amber-100" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function Meta({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+  return <div className={cn("min-w-0", wide && "sm:col-span-2")}><div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/80">{label}</div><div className="mt-1 truncate text-foreground/85">{value}</div></div>;
+}
+
+function clampPage(value: number, max: number) {
+  return Math.max(1, Math.min(Math.max(1, max), value || 1));
+}
+
+function searchTerms(query: string) {
+  return query.toLowerCase().split(/\s+/).map((term) => term.replace(/[^\p{L}\p{N}_-]/gu, "")).filter((term) => term.length > 1).slice(0, 8);
+}
+
+function highlightText(text: string, terms: string[]) {
+  if (terms.length === 0) return text;
+  let result = escapeHtml(text);
+  for (const term of terms) {
+    const escaped = escapeRegex(escapeHtml(term));
+    result = result.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+  }
+  return result;
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapeHtml(value: string) {
+  return value.split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;").split('"').join("&quot;").split("'").join("&#39;");
+}
+
+function formatDate(value: number) {
+  return format(new Date(value * 1000), "MMM d, yyyy");
+}
+
+function formatBytes(value?: number | null) {
+  if (!value) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}

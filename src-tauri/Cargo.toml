@@ -44,10 +44,10 @@ tokio = { version = "1", features = ["full"] }
 pdfium-render = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
-fastembed = "5.14"
+fastembed = { version = "5.14", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 tokio-stream = "0.1"
 ndarray = { version = "0.17", optional = true }
-ort = { version = "2.0.0-rc.12", optional = true }
+ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "tracing", "api-24"] }
 tauri-plugin-stronghold = "2"
 argon2 = "0.5"
 rand = "0.8"
@@ -58,3 +58,5 @@ tokio-util = { version = "0.7", features = ["rt"] }
 chrono = { version = "0.4", features = ["serde"] }
 windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_System_Memory", "Win32_Foundation"] }
 iota_stronghold = "2.1.0"
+tauri-plugin-opener = "2.5.4"
+tracing-appender = "0.2.5"

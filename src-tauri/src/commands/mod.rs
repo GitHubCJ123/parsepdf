@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod app;
 pub mod backfill;
 pub mod chat;
 pub mod database;

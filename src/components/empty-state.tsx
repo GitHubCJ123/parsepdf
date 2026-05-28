@@ -1,3 +1,5 @@
+
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -6,8 +8,9 @@ type EmptyStateProps = {
   icon: LucideIcon;
   title: string;
   description: string;
-  actionLabel: string;
+  actionLabel?: string;
   onAction?: () => void;
+  children?: ReactNode;
   className?: string;
 };
 
@@ -17,28 +20,21 @@ export function EmptyState({
   description,
   actionLabel,
   onAction,
+  children,
   className,
 }: EmptyStateProps) {
   return (
-    <section
-      className={cn(
-        "flex min-h-[calc(100vh-7rem)] items-center justify-center",
-        className,
-      )}
-    >
-      <div className="w-full max-w-md rounded-lg border border-border bg-card/70 p-8 text-center backdrop-blur-xl">
-        <div className="mx-auto mb-5 flex size-10 items-center justify-center rounded-md border border-border bg-secondary/50 text-muted-foreground">
-          <Icon className="size-4" />
-        </div>
-        <h1 className="text-base font-medium tracking-[-0.02em] text-card-foreground">
-          {title}
-        </h1>
-        <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
-          {description}
-        </p>
-        <Button type="button" className="mt-6 rounded-md" onClick={onAction}>
-          {actionLabel}
-        </Button>
+    <section className={cn("grid min-h-72 place-items-center px-4 py-12 text-center", className)}>
+      <div className="w-full max-w-md">
+        <Icon className="mx-auto size-8 text-muted-foreground" aria-hidden="true" strokeWidth={1.6} />
+        <h2 className="mt-5 text-lg font-semibold tracking-[-0.04em] text-card-foreground">{title}</h2>
+        <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+        {actionLabel ? (
+          <Button type="button" className="mt-6 rounded-md" onClick={onAction}>
+            {actionLabel}
+          </Button>
+        ) : null}
+        {children ? <div className="mt-5">{children}</div> : null}
       </div>
     </section>
   );

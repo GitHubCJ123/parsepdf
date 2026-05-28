@@ -3,6 +3,7 @@ mod commands;
 pub mod db;
 pub mod events;
 pub mod jobs;
+pub mod logging;
 pub mod ocr;
 pub mod rag;
 pub mod search;
@@ -14,13 +15,16 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    let _log_guard = db::log_dir()
+        .ok()
+        .and_then(|path| logging::install_tracing_subscriber(&path).ok());
     db::register_sqlite_vec_auto_extension();
     let database_url = db::database_url().expect("failed to resolve PDF-Parser database path");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
@@ -98,6 +102,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app::app_paths,
+            commands::app::log_tail,
+            commands::app::log_save_selection,
             commands::ai::ai_apply_rename,
             commands::ai::ai_health_check,
             commands::ai::ai_list_models,
@@ -131,6 +138,7 @@ pub fn run() {
             commands::chat::chat_send,
             commands::chat::chat_status,
             commands::search::search,
+            commands::search::search_document,
             commands::backfill::search_rebuild_index,
             commands::updates::prepare_for_update,
             ai::secrets::secrets_delete,

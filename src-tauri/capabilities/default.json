@@ -10,6 +10,7 @@
     "process:default",
     "sql:default",
     "updater:default",
+    "opener:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [

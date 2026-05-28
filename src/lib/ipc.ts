@@ -316,8 +316,26 @@ export type DatabaseInfo = {
   sqlite_vec_loaded: boolean;
 };
 
+export type AppPaths = {
+  data_dir: string;
+  log_dir: string;
+  current_log: string;
+};
+
 export function initializeDatabase() {
   return invoke<DatabaseInfo>("initialize_database");
+}
+
+export function appPaths() {
+  return invoke<AppPaths>("app_paths");
+}
+
+export function logTail(level?: string, maxLines = 500) {
+  return invoke<string>("log_tail", { level: level ?? null, maxLines });
+}
+
+export function logSaveSelection(path: string, text: string) {
+  return invoke<void>("log_save_selection", { path, text });
 }
 
 export function processPdf(inputPath: string, engineId?: string) {
@@ -411,6 +429,10 @@ export function libraryOpenExternal(documentId: number) {
 
 export function searchDocuments(query: SearchQuery) {
   return invoke<SearchResult>("search", { query });
+}
+
+export function searchDocument(documentId: number, query: string) {
+  return invoke<SearchHit[]>("search_document", { documentId, query });
 }
 
 export function searchRebuildIndex() {

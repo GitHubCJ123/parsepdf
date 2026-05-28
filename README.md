@@ -1,26 +1,37 @@
 # PDF-Parser
 
-PDF-Parser is a Windows-first, local-first desktop app for turning folders of scanned and downloaded PDFs into a searchable, AI-named document library. It is built with Tauri 2, React 19, Tailwind v4, shadcn/ui, and a bundled SQLite database with FTS5 + sqlite-vec.
+A Windows desktop app for turning PDFs into a searchable, AI-named local library.
 
-![PDF-Parser screenshot placeholder](docs/screenshot.png)
+![PDF-Parser library screenshot](docs/screenshot-library.png)
 
-## Phase 0 foundation
+## Features
 
-- React 19, Vite 6, TypeScript 5, Tailwind CSS v4, shadcn/ui, Geist fonts
-- Dark Linear-style app shell with Inbox, Library, Search, Chat, and Settings routes
-- Ctrl+K command palette skeleton
-- SQLite app database at `%APPDATA%\PDF-Parser\db\app.db`
-- FTS5 migration, sqlite-vec registration, and startup PRAGMAs
+- OCR pipeline with Tesseract 5, pdfium-render, and lopdf searchable-PDF output
+- Optional AI naming through OpenRouter or local Ollama, with secure key storage
+- Library, Inbox, Search, Chat, and Settings panels in a Tauri 2 desktop shell
+- FTS5 full-text search with highlighted snippets and saved searches
+- Folder watcher with stable-write detection, queue progress, retries, and cancellation
+- Document-aware RAG chat with local embeddings and grounded citations
+- RapidOCR PP-OCRv5 opt-in model download with SHA256 verification
+- GitHub Actions release pipeline with MSI, NSIS, and Tauri updater artifacts
+
+## Quick start
+
+1. Download the latest MSI from the GitHub Releases page.
+2. Install and launch PDF-Parser.
+3. Drag PDFs into Inbox, or choose **Choose files**.
+4. Optional: open Settings to configure OpenRouter, Ollama, or watched folders.
+
+PDF-Parser works offline by default. Cloud AI is only used after you configure it.
 
 ## Building from source
 
 ### Prerequisites
 
-- Windows 10/11
-- Node.js 20+
-- pnpm 9+
+- Windows 10/11 with WebView2
+- Node.js 20+ and pnpm 10+
 - Rust stable with the `x86_64-pc-windows-msvc` target
-- Tauri prerequisites for Windows, including Microsoft C++ Build Tools and WebView2
+- Microsoft C++ Build Tools
 
 ### Development
 
@@ -36,56 +47,50 @@ pnpm install
 pnpm tauri build
 ```
 
-For a faster local verification build:
+Fast local bundle check:
 
 ```powershell
 pnpm tauri build --debug
 ```
 
-## Releasing
+## Architecture
 
-The release pipeline is tag-driven. Before the first release, replace the `<OWNER>` placeholder in `src-tauri\tauri.conf.json` under `plugins.updater.endpoints` with the GitHub user or organization that owns the `PDF-Parser` repository.
-
-1. Bump the app version in `src-tauri\tauri.conf.json` (`version`). Tauri reads this value when `pnpm tauri build` creates installers and updater metadata.
-2. Confirm the Ed25519 updater public key is embedded in `src-tauri\tauri.conf.json` at `plugins.updater.pubkey`.
-3. Copy the private updater key contents from `C:\Users\jacob\.copilot\session-state\0a7757fe-40fc-4764-892e-0085b8c8387d\files\tauri_updater.key` into a GitHub Actions secret named `TAURI_SIGNING_PRIVATE_KEY`. Never commit this key.
-4. If a password-protected key is generated in the future, add `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The auto-generated v1 key has no password, so leave this secret empty or unset.
-5. Tag and push the release:
-
-```powershell
-git tag v0.1.0
-git push origin v0.1.0
+```text
+React + shadcn UI
+        │ typed IPC/events
+        ▼
+Tauri commands ── SQLite + FTS5 + sqlite-vec
+        │
+        ├─ OCR worker pool ── pdfium-render ── Tesseract/RapidOCR
+        ├─ AI naming ─────── OpenRouter/Ollama
+        ├─ RAG chat ──────── fastembed + BGE chunks
+        └─ Watcher/updater ─ notify + Tauri updater
 ```
 
-The `Release` GitHub Actions workflow builds on `windows-latest`, produces MSI and NSIS installers, signs updater artifacts, generates `latest.json`, attaches SHA256 checksums, and publishes the GitHub Release with release notes.
+## Screenshots
 
-## First install on Windows
-
-The v1 installer is intentionally unsigned, so Windows SmartScreen may show an "Unknown publisher" warning. Click **More info → Run anyway** only if you downloaded the installer from this repository's GitHub Release.
-
-To verify an installer manually:
+`docs/screenshot-library.png` is a transparent placeholder in this non-interactive build environment. To regenerate placeholders, run:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\PDF-Parser_0.1.0_x64_en-US.msi
+powershell -ExecutionPolicy Bypass -File scripts\create_placeholder_screenshots.ps1
 ```
 
-Compare the hash with the `checksums.txt` file attached to the same GitHub Release.
+Replace the placeholder with real app screenshots before publishing the release.
 
-## Auto-updates
+## Roadmap
 
-PDF-Parser uses the Tauri updater plugin. Each release publishes an Ed25519-signed `latest.json` feed to GitHub Releases, and the app checks that feed on launch and every 6 hours while running. When an update is available, the app shows release notes and an **Install and restart** action. The updater verifies the signature with the public key embedded in `tauri.conf.json` before installing.
+Not in v0.1.0:
 
-## RapidOCR opt-in models
+- Code signing and SmartScreen reputation
+- Cloud OCR providers
+- Multi-language UI
+- Strict PDF/A validation
+- Sandboxed PDF parsing process isolation
 
-RapidOCR is not bundled in the default installers. Users install the PP-OCRv5 ONNX models from Settings → OCR; files are stored in `%LOCALAPPDATA%\PDF-Parser\engines\rapidocr\` and SHA256-verified after download and before each load. See `MODELS.md` and `scripts\gen_rapidocr_manifest.ps1` for the pinned URLs, sizes, and regeneration steps.
+## Contributing
 
-The full RapidOCR smoke test downloads about 179 MB, so CI/unit validation uses manifest and tamper tests instead of downloading models by default.
+This is a personal project. Keep changes small, local-first, and covered by `cargo test --workspace`, clippy, and a Tauri build when UI or packaging changes.
 
-## Verification
+## License
 
-```powershell
-pnpm build
-cargo build --release
-cargo build --release --features rapidocr
-pnpm tauri build --debug
-```
+MIT. See [LICENSE](LICENSE).

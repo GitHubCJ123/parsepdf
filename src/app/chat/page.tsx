@@ -1,9 +1,9 @@
-import { Link } from "@tanstack/react-router";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { format } from "date-fns";
-import { BookOpen, ChevronLeft, FileText, Loader2, MessageSquareText, PanelLeftClose, PanelLeftOpen, Search, Send, Sparkles, X } from "lucide-react";
+import { FileText, Loader2, MessageCircle, MessageCircleOff, MessageSquareText, PanelLeftClose, PanelLeftOpen, Search, Send, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { CitationPill, type CitationSource } from "@/components/citation-pill";
+import { EmptyState } from "@/components/empty-state";
+import { PdfPreviewDrawer } from "@/components/pdf-preview-drawer";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { getSetting } from "@/lib/db";
@@ -93,6 +93,16 @@ export function ChatPage() {
       for (const unlisten of unlisteners) void unlisten.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const newThread = () => {
+      setActiveThreadId(null);
+      setMessages([]);
+      setError(null);
+    };
+    window.addEventListener("pdf-parser:new-chat", newThread);
+    return () => window.removeEventListener("pdf-parser:new-chat", newThread);
   }, []);
 
   const activeCitedMessage = useMemo(
@@ -247,33 +257,32 @@ export function ChatPage() {
 
 function NoDocuments() {
   return (
-    <section className="grid min-h-[calc(100vh-7rem)] place-items-center">
-      <div className="max-w-md rounded-xl border border-border bg-card/75 p-8 text-center shadow-2xl shadow-black/20">
-        <div className="mx-auto grid size-11 place-items-center rounded-lg border border-border bg-secondary/50"><BookOpen className="size-5" /></div>
-        <h1 className="mt-5 text-lg font-semibold tracking-[-0.04em]">Process some PDFs first</h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">Document-aware chat needs OCR text and local embeddings before it can answer with citations.</p>
-        <Button asChild className="mt-5"><Link to="/inbox">Open inbox</Link></Button>
-      </div>
-    </section>
+    <EmptyState
+      icon={MessageCircleOff}
+      title="Add documents first"
+      description="Process a few PDFs to enable chat over your library."
+      actionLabel="Go to Inbox"
+      onAction={() => window.location.assign("/inbox")}
+      className="min-h-[calc(100vh-7rem)]"
+    />
   );
 }
 
 function ChatEmptyState() {
+  const suggestions = ["Find the Acme invoice", "Summarize March notes", "Show budget changes"];
   return (
-    <div className="mx-auto grid h-full max-w-2xl place-items-center text-center">
-      <div>
-        <div className="mx-auto grid size-12 place-items-center rounded-xl border border-border bg-secondary/50"><Sparkles className="size-5" /></div>
-        <h1 className="mt-5 text-2xl font-semibold tracking-[-0.06em]">Ask anything about your library</h1>
-        <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-muted-foreground">Try: “Find the invoice from Acme”, “Summarize my March meeting notes”, or “What were the budget changes?”</p>
+    <EmptyState icon={MessageCircle} title="Ask anything about your library" description="Hybrid search retrieves relevant pages and answers with citations." className="h-full min-h-full">
+      <div className="flex flex-wrap justify-center gap-2">
+        {suggestions.map((suggestion) => <span key={suggestion} className="rounded-full border border-border bg-background/45 px-3 py-1 text-xs text-muted-foreground">{suggestion}</span>)}
       </div>
-    </div>
+    </EmptyState>
   );
 }
 
 function MessageBubble({ message, active, searching, onOpenCitation }: { message: ChatMessage; active: boolean; searching: boolean; onOpenCitation: (citation: CitationSource) => void }) {
   const isUser = message.role === "user";
   return (
-    <article className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+    <article className={cn("flex", isUser ? "justify-end" : "justify-start")} aria-live={!isUser && active ? "polite" : undefined} aria-atomic={false}>
       <div className={cn("max-w-[86%] rounded-xl border px-3 py-2", isUser ? "border-foreground/10 bg-foreground text-background" : "border-border bg-background/75 text-foreground")}>
         {searching ? <PhasePill label="Searching library…" /> : null}
         <div className="whitespace-pre-wrap text-sm leading-6">
@@ -337,32 +346,33 @@ function SourceRail({ message, onOpen }: { message: ChatMessage; onOpen: (citati
 
 function CitationPreviewDrawer({ citation, onClose }: { citation: CitationSource; onClose: () => void }) {
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
-    void libraryGet(citation.document_id).then((next) => { if (!cancelled) setDetail(next); });
+    setLoading(true);
+    void libraryGet(citation.document_id)
+      .then((next) => { if (!cancelled) setDetail(next); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [citation.document_id]);
-  const pdfUrl = detail?.document.output_path ? convertFileSrc(detail.document.output_path) : null;
+
   return (
-    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-3xl flex-col border-l border-border bg-background/95 shadow-2xl shadow-black/50 backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-4 border-b border-border p-4">
-        <div className="min-w-0">
-          <button type="button" onClick={onClose} className="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="size-3" />Back to chat</button>
-          <h2 className="truncate text-xl font-semibold tracking-[-0.04em]">{citation.document_name}</h2>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Citation [{citation.index}] · page {citation.page_number}</p>
+    <PdfPreviewDrawer
+      detail={detail}
+      loading={loading}
+      initialPage={citation.page_number}
+      onClose={onClose}
+      eyebrow={`Citation [${citation.index}]`}
+      citation={(
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-100/80">Highlighted source text</p>
+          <mark className="mt-2 block rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm leading-6 text-foreground">{citation.excerpt}</mark>
         </div>
-        <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close source preview"><X className="size-4" /></Button>
-      </div>
-      <div className="border-b border-border bg-emerald-300/5 p-4">
-        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-100/80">Highlighted source text</p>
-        <mark className="mt-2 block rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm leading-6 text-foreground">{citation.excerpt}</mark>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-black/25 p-4">
-        {pdfUrl ? <object data={`${pdfUrl}#page=${citation.page_number}`} type="application/pdf" className="h-[72vh] w-full rounded-lg border border-border bg-background"><embed src={`${pdfUrl}#page=${citation.page_number}`} type="application/pdf" /></object> : <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading preview…</div>}
-      </div>
-    </div>
+      )}
+    />
   );
 }
+
 
 function SelectLabel({ label, children }: { label: string; children: ReactNode }) {
   return <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"><span>{label}</span>{children}</label>;

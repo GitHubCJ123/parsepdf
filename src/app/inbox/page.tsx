@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, CheckCircle2, Clock3, FileText, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock3, FileText, Inbox as InboxIcon, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { useOcrEngines } from "@/components/engine-selector";
 import { ErrorBanner } from "@/components/error-banner";
 import { QualityUpgradePrompt } from "@/components/quality-upgrade-prompt";
 import { Button } from "@/components/ui/button";
+import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
   jobsCancel,
@@ -131,6 +133,7 @@ export function InboxPage() {
       const queued = await processPdf(path, engineId);
       setJobs((current) => mergeJobRows(current, [queued]));
       setQueueMessage("Queued for OCR.");
+      notifySuccess("Queued for OCR.");
     } catch (error) {
       addBanner({ id: `manual-${Date.now()}`, severity: "error", title: "PDF could not be queued", message: basename(path), details: error instanceof Error ? error.message : String(error) });
     }
@@ -201,7 +204,7 @@ export function InboxPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" size="lg" onClick={() => void choosePdf()}>
                 <UploadCloud className="size-4" />
-                Process PDFs
+                Choose files
               </Button>
               <EnginePicker engines={engines} selectedEngineId={selectedEngineId} onChange={setSelectedEngineId} />
               {queueMessage ? <span className="rounded-lg border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground">{queueMessage}</span> : null}
@@ -221,11 +224,11 @@ export function InboxPage() {
 
       {persistentIssue ? <InboxIssueBanner issue={persistentIssue} retryFailed={retryFailed} openSettings={() => void navigate({ to: "/settings" })} /> : null}
       {banners.map((banner) => (
-        <ErrorBanner key={banner.id} severity={banner.severity} title={banner.title} message={banner.message} details={banner.details} dismissable onDismiss={() => setBanners((current) => current.filter((item) => item.id !== banner.id))} actions={[{ label: "Open Settings", onClick: () => void navigate({ to: "/settings" }) }]} />
+        <ErrorBanner key={banner.id} severity={banner.severity} title={banner.title} message={banner.message} details={banner.details} dismissable onDismiss={() => setBanners((current) => current.filter((item) => item.id !== banner.id))} actions={[{ label: "Open settings", onClick: () => void navigate({ to: "/settings" }) }]} />
       ))}
 
       <section className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-2xl border border-border bg-card/70 p-5">
+        <div className="rounded-2xl border border-border bg-card/70 p-5" aria-live="polite">
           <div className="flex items-end justify-between gap-4">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted-foreground">Queue aggregate</p>
@@ -272,7 +275,11 @@ export function InboxPage() {
           </div>
         </div>
         {filteredJobs.length === 0 ? (
-          <div className="px-4 py-12 text-center text-sm text-muted-foreground">Nothing in the queue. Drag PDFs here, pick a file, or watch a folder in Settings.</div>
+          jobs.length === 0 ? (
+            <EmptyState icon={InboxIcon} title="Nothing to process" description="Drag a PDF here, pick a file, or watch a folder." actionLabel="Choose file" onAction={() => void choosePdf()} />
+          ) : (
+            <div className="px-4 py-12 text-center text-sm text-muted-foreground">No jobs match this filter.</div>
+          )
         ) : (
           <div className="overflow-auto" style={{ height: LIST_HEIGHT }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
             <div style={{ height: filteredJobs.length * ITEM_HEIGHT, position: "relative" }}>
@@ -291,14 +298,14 @@ function InboxIssueBanner({ issue, retryFailed, openSettings }: { issue: BannerS
   const actions = issue.title.includes("rate")
     ? [{ label: "Retry", onClick: () => void retryFailed() }]
     : issue.title.includes("Ollama")
-      ? [{ label: "Open Ollama", onClick: () => window.open("http://localhost:11434", "_blank") }, { label: "Open Settings", onClick: openSettings }]
-      : [{ label: "Open Settings", onClick: openSettings }];
+      ? [{ label: "Open Ollama", onClick: () => window.open("http://localhost:11434", "_blank") }, { label: "Open settings", onClick: openSettings }]
+      : [{ label: "Open settings", onClick: openSettings }];
   return <ErrorBanner severity={issue.severity} title={issue.title} message={issue.message} details={issue.details} actions={actions} />;
 }
 
 function JobRow({ job, onCancel, onRetry }: { job: QueueJob; onCancel: () => void; onRetry: () => void }) {
   return (
-    <div className="grid min-h-[76px] grid-cols-[minmax(0,1.4fr)_0.6fr_0.7fr_0.8fr_0.6fr_1fr_auto] items-center gap-3 border-b border-border px-4 py-3 text-sm">
+    <div tabIndex={0} className="grid min-h-[76px] grid-cols-[minmax(0,1.4fr)_0.6fr_0.7fr_0.8fr_0.6fr_1fr_auto] items-center gap-3 border-b border-border px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <div className="min-w-0"><p className="truncate font-medium text-foreground">{job.filename}</p><p className="text-xs text-muted-foreground">{job.source}</p></div>
       <StatusBadge status={job.status} />
       <span className="truncate text-xs text-muted-foreground">{formatStage(job.stage)}</span>

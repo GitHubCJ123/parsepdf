@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { Bookmark, ChevronDown, ChevronRight, DatabaseZap, Loader2, Search, SlidersHorizontal } from "lucide-react";
+import { Bookmark, ChevronDown, ChevronRight, DatabaseZap, Loader2, Search, SearchX, SlidersHorizontal } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { execute, selectRows } from "@/lib/db";
@@ -162,7 +163,7 @@ export function SearchPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search OCR text by name, date, invoice number, or phrase…" className="h-10 pl-9 text-sm" autoFocus />
+            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search OCR text by name, date, invoice number, or phrase" className="h-10 pl-9 text-sm" autoFocus data-global-search="true" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" onClick={() => setSearchNonce((value) => value + 1)} disabled={!query.trim() || loading}>
@@ -202,9 +203,9 @@ export function SearchPage() {
               </div>
             </div>
           ) : !query.trim() ? (
-            <EmptySearchState title="Search across all OCR'd documents." description="Try a name, date, invoice number, or keyword. Quoted phrases are preserved." />
+            <EmptyState icon={Search} title="Search your library" description="Find text across every OCR'd page." />
           ) : !loading && result && result.hits.length === 0 ? (
-            <EmptySearchState title="No matches." description="Try fewer or different words, clear filters, or rebuild the search index." />
+            <EmptyState icon={SearchX} title="No matches" description="Try fewer or different words." />
           ) : (
             <div className="divide-y divide-border">
               {groups.map((group) => {
@@ -324,20 +325,6 @@ function HitRow({ hit, selected, onOpen }: { hit: SearchHit; selected: boolean; 
       <span className="mt-0.5 rounded-md border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground">p.{hit.page_number}</span>
       <span className="min-w-0 flex-1 text-sm leading-6 text-foreground/85 [&_mark]:rounded [&_mark]:bg-amber-400/25 [&_mark]:px-0.5 [&_mark]:text-amber-100" dangerouslySetInnerHTML={{ __html: sanitizeSnippetHtml(hit.snippet_html) }} />
     </button>
-  );
-}
-
-function EmptySearchState({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="grid place-items-center px-4 py-16 text-center">
-      <div className="max-w-md rounded-xl border border-border bg-background/35 p-6">
-        <div className="mx-auto grid size-10 place-items-center rounded-lg border border-border bg-secondary/50 text-muted-foreground">
-          <Search className="size-4" />
-        </div>
-        <h2 className="mt-4 text-base font-semibold tracking-[-0.04em]">{title}</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
-      </div>
-    </div>
   );
 }
 

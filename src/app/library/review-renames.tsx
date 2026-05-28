@@ -104,7 +104,7 @@ export function ReviewRenamesPage() {
               AI proposals are staged only. Accept, edit, regenerate, or skip each filename before anything is renamed on disk.
             </p>
           </div>
-          <Button asChild variant="outline"><Link to="/library">Back to Library</Link></Button>
+          <Button asChild variant="outline"><Link to="/library">Back to library</Link></Button>
         </div>
       </header>
 

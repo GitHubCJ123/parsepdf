@@ -23,17 +23,26 @@ pub enum DbError {
 }
 
 pub fn app_data_dir() -> Result<PathBuf, DbError> {
+    if let Some(local_appdata) = env::var_os("LOCALAPPDATA") {
+        return Ok(PathBuf::from(local_appdata).join("PDF-Parser"));
+    }
+
     if let Some(appdata) = env::var_os("APPDATA") {
         return Ok(PathBuf::from(appdata).join("PDF-Parser"));
     }
 
-    dirs::config_dir()
+    dirs::data_local_dir()
+        .or_else(dirs::config_dir)
         .map(|path| path.join("PDF-Parser"))
         .ok_or(DbError::MissingAppData)
 }
 
 pub fn database_path() -> Result<PathBuf, DbError> {
     Ok(app_data_dir()?.join("db").join("app.db"))
+}
+
+pub fn log_dir() -> Result<PathBuf, DbError> {
+    Ok(app_data_dir()?.join("Logs"))
 }
 
 pub fn database_url() -> Result<String, DbError> {
@@ -74,17 +83,17 @@ pub fn prepare_database() -> Result<AppDatabase, DbError> {
         Ok(()) => {
             match connection.query_row("SELECT vec_version()", [], |row| row.get::<_, String>(0)) {
                 Ok(version) => {
-                    eprintln!("[db] sqlite-vec loaded ({version})");
+                    tracing::info!(version, "sqlite-vec loaded");
                     true
                 }
                 Err(error) => {
-                    eprintln!("[db] sqlite-vec verification failed: {error}");
+                    tracing::warn!(error = %error, "sqlite-vec verification failed");
                     false
                 }
             }
         }
         Err(code) => {
-            eprintln!("[db] sqlite-vec registration failed with code {code}");
+            tracing::warn!(code, "sqlite-vec registration failed");
             false
         }
     };

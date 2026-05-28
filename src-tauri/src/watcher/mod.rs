@@ -475,11 +475,26 @@ pub fn should_ignore_filename(filename: &str) -> bool {
 }
 
 pub fn is_under_excluded_path(path: &Path, excluded_paths: &HashSet<PathBuf>) -> bool {
-    let normalized = normalize_path(path);
-    excluded_paths
-        .iter()
-        .map(|path| normalize_path(path))
-        .any(|excluded| normalized.starts_with(excluded))
+    let normalized = normalize_path_key(path);
+    excluded_paths.iter().any(|excluded| {
+        let excluded = normalize_path_key(excluded);
+        normalized == excluded || normalized.starts_with(&format!("{excluded}/"))
+    })
+}
+
+fn normalize_path_key(path: &Path) -> String {
+    let mut key = normalize_path(path).to_string_lossy().replace('\\', "/");
+    if let Some(stripped) = key.strip_prefix("//?/") {
+        key = stripped.to_string();
+    }
+    while key.ends_with('/') {
+        key.pop();
+    }
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

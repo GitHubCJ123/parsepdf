@@ -1,11 +1,13 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+
+import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { format } from "date-fns";
-import { Copy, ExternalLink, Library, Loader2, Search, Trash2, X } from "lucide-react";
+import { Library as LibraryIcon, Loader2, Search, Sparkles } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
+import { PdfPreviewDrawer } from "@/components/pdf-preview-drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { libraryDelete, libraryGet, libraryList, libraryOpenExternal, libraryPendingRenames, type DocumentDetail, type DocumentRow, type PendingRenameRow } from "@/lib/ipc";
+import { libraryDelete, libraryGet, libraryList, libraryPendingRenames, type DocumentDetail, type DocumentRow, type PendingRenameRow } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 export function LibraryPage() {
@@ -64,19 +66,18 @@ export function LibraryPage() {
   const filteredDocuments = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return documents;
-    return documents.filter((document) =>
-      [document.display_name, document.original_name, document.ocr_engine, document.ai_provider]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(needle),
-    );
+    return documents.filter((document) => [document.display_name, document.original_name, document.ocr_engine, document.ai_provider].filter(Boolean).join(" ").toLowerCase().includes(needle));
   }, [documents, query]);
 
   async function deleteSelected(documentId: number) {
     await libraryDelete(documentId, false);
     setSelectedId(null);
     await refresh();
+  }
+
+  function openDocument(documentId: number, page = 1) {
+    setPreviewPage(page);
+    setSelectedId(documentId);
   }
 
   return (
@@ -86,23 +87,21 @@ export function LibraryPage() {
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">Processed archive</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-[-0.055em]">Library</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Browse searchable PDFs, inspect OCR metadata, and preview the rendered file without leaving the app.
-            </p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Browse searchable PDFs, inspect OCR metadata, and preview the rendered file without leaving the app.</p>
           </div>
           <div className="relative w-full max-w-sm">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name, engine, provider…" className="pl-8" />
+            <Input data-global-search="true" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name, engine, or provider" className="pl-8" />
           </div>
         </div>
       </header>
 
-      {pendingRenames.length > 0 && (
-        <Link to="/library/review-renames" className="flex items-center justify-between rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 transition-colors hover:bg-amber-400/15">
-          <span>{pendingRenames.length} document{pendingRenames.length === 1 ? "" : "s"} ready for naming.</span>
-          <span className="font-medium">Review →</span>
+      {pendingRenames.length > 0 ? (
+        <Link to="/library/review-renames" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 transition-colors hover:bg-amber-400/15">
+          <span className="flex items-center gap-3"><Sparkles className="size-8 text-amber-100/80" /><span><strong>{pendingRenames.length} files awaiting review</strong><span className="ml-2 text-amber-100/75">Confirm AI-suggested names before they're applied.</span></span></span>
+          <span className="rounded-md border border-amber-200/25 px-3 py-1 font-medium">Review</span>
         </Link>
-      )}
+      ) : null}
 
       <section className="overflow-hidden rounded-xl border border-border bg-card/65">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -110,45 +109,24 @@ export function LibraryPage() {
             <h2 className="text-sm font-medium">Processed PDFs</h2>
             <p className="text-xs text-muted-foreground">{filteredDocuments.length} visible · click a row to preview</p>
           </div>
-          <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading}>
-            {loading ? <Loader2 className="size-4 animate-spin" /> : null}
-            Refresh
-          </Button>
+          <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading}>{loading ? <Loader2 className="size-4 animate-spin" /> : null}Refresh</Button>
         </div>
 
         {loading ? (
-          <div className="grid place-items-center px-4 py-16 text-sm text-muted-foreground">
-            <Loader2 className="mb-3 size-5 animate-spin" />
-            Loading library…
-          </div>
+          <div className="grid place-items-center px-4 py-16 text-sm text-muted-foreground"><Loader2 className="mb-3 size-5 animate-spin" />Loading library…</div>
+        ) : documents.length === 0 ? (
+          <EmptyState icon={LibraryIcon} title="Your library is empty" description="Process a PDF to start building your searchable archive." actionLabel="Go to Inbox" onAction={() => window.location.assign("/inbox")} />
         ) : filteredDocuments.length === 0 ? (
-          <div className="grid place-items-center px-4 py-16 text-center">
-            <div className="grid size-12 place-items-center rounded-xl border border-border bg-secondary/70">
-              <Library className="size-5" />
-            </div>
-            <h3 className="mt-4 text-lg font-semibold tracking-[-0.04em]">No documents yet.</h3>
-            <p className="mt-2 text-sm text-muted-foreground">Process a PDF to get started.</p>
-            <Button asChild className="mt-4">
-              <Link to="/inbox">Process PDF</Link>
-            </Button>
-          </div>
+          <EmptyState icon={Search} title="No matches" description="Try fewer or different words." />
         ) : (
           <div className="overflow-auto">
             <table className="w-full min-w-[860px] text-left text-sm">
               <thead className="bg-background/40 font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                <tr>
-                  <Th>Name</Th>
-                  <Th>Original</Th>
-                  <Th>Pages</Th>
-                  <Th>Date</Th>
-                  <Th>Engine</Th>
-                  <Th>AI Provider</Th>
-                  <Th>Size</Th>
-                </tr>
+                <tr><Th>Name</Th><Th>Original</Th><Th>Pages</Th><Th>Date</Th><Th>Engine</Th><Th>AI provider</Th><Th>Size</Th></tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredDocuments.map((document) => (
-                  <tr key={document.id} onClick={() => { setPreviewPage(1); setSelectedId(document.id); }} className="cursor-pointer transition-colors hover:bg-secondary/45">
+                  <tr key={document.id} tabIndex={0} role="button" onClick={() => openDocument(document.id)} onKeyDown={(event: KeyboardEvent<HTMLTableRowElement>) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openDocument(document.id); } }} className="cursor-pointer transition-colors hover:bg-secondary/45 focus-visible:bg-secondary/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <Td className="max-w-[20rem]"><div className="truncate font-medium">{document.display_name}</div></Td>
                     <Td className="max-w-[16rem]"><div className="truncate text-muted-foreground">{document.original_name}</div></Td>
                     <Td>{document.page_count}</Td>
@@ -164,85 +142,9 @@ export function LibraryPage() {
         )}
       </section>
 
-      <PreviewDrawer detail={detail} loading={detailLoading} currentPage={previewPage} onClose={() => { setSelectedId(null); setPreviewPage(1); }} onDelete={deleteSelected} />
+      <PdfPreviewDrawer detail={detail} loading={detailLoading} initialPage={previewPage} onClose={() => { setSelectedId(null); setPreviewPage(1); }} onDelete={deleteSelected} />
     </div>
   );
-}
-
-function PreviewDrawer({ detail, loading, currentPage, onClose, onDelete }: { detail: DocumentDetail | null; loading: boolean; currentPage: number; onClose: () => void; onDelete: (documentId: number) => Promise<void> }) {
-  const [page, setPage] = useState(currentPage);
-  useEffect(() => {
-    const maxPage = Math.max(1, detail?.document.page_count ?? currentPage);
-    setPage(Math.min(maxPage, Math.max(1, currentPage)));
-  }, [detail?.document.id, detail?.document.page_count, currentPage]);
-
-  if (!detail && !loading) return null;
-
-  const document = detail?.document;
-  const pdfUrl = document?.output_path ? convertFileSrc(document.output_path) : null;
-
-  return (
-    <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-3xl flex-col border-l border-border bg-background/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-4 border-b border-border p-4">
-        <div className="min-w-0">
-          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Preview drawer</p>
-          <h2 className="mt-1 truncate text-xl font-semibold tracking-[-0.04em]">{document?.display_name ?? "Loading…"}</h2>
-          {document?.ai_summary && <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{document.ai_summary}</p>}
-        </div>
-        <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close preview"><X className="size-4" /></Button>
-      </div>
-
-      {loading || !document ? (
-        <div className="grid flex-1 place-items-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
-      ) : (
-        <>
-          <div className="grid gap-3 border-b border-border p-4 text-xs text-muted-foreground sm:grid-cols-2">
-            <Meta label="Original" value={document.original_name} />
-            <Meta label="Pages" value={String(document.page_count)} />
-            <Meta label="OCR" value={document.ocr_engine ?? "—"} />
-            <Meta label="AI" value={document.ai_provider ?? "none"} />
-            <Meta label="Ingested" value={formatDate(document.ingested_at)} />
-            <Meta label="Size" value={formatBytes(document.size_bytes)} />
-            <Meta label="Output" value={document.output_path ?? "—"} wide />
-            <Meta label="Original path" value={document.original_path} wide />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto bg-black/25 p-4">
-            {pdfUrl ? (
-              <div className="mx-auto max-w-2xl">
-                <div className="mb-3 flex items-center justify-between rounded-lg border border-border bg-background/75 px-3 py-2 text-sm">
-                  <span>Page {page} of {Math.max(1, document.page_count)}</span>
-                  <div className="flex items-center gap-2">
-                    <Button type="button" size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Prev</Button>
-                    <Button type="button" size="sm" variant="outline" disabled={page >= Math.max(1, document.page_count)} onClick={() => setPage((value) => Math.min(Math.max(1, document.page_count), value + 1))}>Next</Button>
-                  </div>
-                </div>
-                <PreviewFallback url={`${pdfUrl}#page=${page}`} />
-              </div>
-            ) : (
-              <div className="grid h-full place-items-center text-sm text-muted-foreground">No output PDF path recorded.</div>
-            )}
-          </div>
-
-          <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-4">
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => void libraryOpenExternal(document.id)}><ExternalLink className="size-4" />Open externally</Button>
-              <Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(document.output_path ?? "")}><Copy className="size-4" />Copy path</Button>
-            </div>
-            <Button type="button" variant="destructive" onClick={() => void onDelete(document.id)}><Trash2 className="size-4" />Delete</Button>
-          </footer>
-        </>
-      )}
-    </div>
-  );
-}
-
-function PreviewFallback({ url }: { url: string }) {
-  return <object data={url} type="application/pdf" className="h-[72vh] w-full rounded-lg border border-border bg-background"><embed src={url} type="application/pdf" /></object>;
-}
-
-function Meta({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
-  return <div className={cn("min-w-0", wide && "sm:col-span-2")}><div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/80">{label}</div><div className="mt-1 truncate text-foreground/85">{value}</div></div>;
 }
 
 function Th({ children }: { children: ReactNode }) {
@@ -278,4 +180,3 @@ function formatBytes(value?: number | null) {
   }
   return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-

@@ -80,6 +80,60 @@ pub enum SearchError {
     DbOpen(#[from] crate::db::DbError),
 }
 
+pub fn search_document_db(
+    db_path: &Path,
+    document_id: i64,
+    query: &str,
+) -> Result<Vec<SearchHit>, SearchError> {
+    let (match_expr, _) = build_match_expr(query)?;
+    let connection = crate::db::open_connection_at(db_path)?;
+    let mut statement = connection.prepare(
+        "SELECT
+            d.id AS document_id,
+            d.display_name,
+            d.original_path,
+            p.id AS page_id,
+            p.page_number,
+            snippet(pages_fts, 0, ?3, ?4, '…', 16) AS snippet_html,
+            bm25(pages_fts) AS bm25_score,
+            d.ingested_at,
+            d.ocr_engine
+         FROM pages_fts
+         JOIN pages p ON p.id = pages_fts.rowid
+         JOIN documents d ON d.id = p.document_id
+         WHERE pages_fts MATCH ?1
+           AND d.id = ?2
+           AND d.status IN ('done', 'partial_success')
+           AND d.deleted_at IS NULL
+         ORDER BY p.page_number ASC
+         LIMIT 100",
+    )?;
+    let hits = statement
+        .query_map(
+            params![match_expr, document_id, START_MARK, END_MARK],
+            |row| {
+                let display_name = row
+                    .get::<_, Option<String>>(1)?
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| basename(&row.get::<_, String>(2).unwrap_or_default()));
+                let snippet: String = row.get(5)?;
+                let score = row.get::<_, f64>(6)? as f32;
+                Ok(SearchHit {
+                    document_id: row.get(0)?,
+                    display_name,
+                    page_id: row.get(3)?,
+                    page_number: row.get(4)?,
+                    snippet_html: escape_snippet(&snippet),
+                    bm25_score: score,
+                    document_ingested_at: row.get(7)?,
+                    ocr_engine: row.get(8)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(hits)
+}
+
 pub fn search_db(db_path: &Path, query: SearchQuery) -> Result<SearchResult, SearchError> {
     let (match_expr, query_warnings) = build_match_expr(&query.q)?;
     let limit = normalize_limit(query.limit);
@@ -304,7 +358,10 @@ mod tests {
         )
         .unwrap();
 
-        eprintln!("1000-page FTS5 search took {} ms", result.took_ms);
+        tracing::info!(
+            took_ms = result.took_ms,
+            "1000-page FTS5 search benchmark completed"
+        );
         assert_eq!(result.total_hits, 1_000);
         assert_eq!(result.hits.len(), 50);
         assert!(
