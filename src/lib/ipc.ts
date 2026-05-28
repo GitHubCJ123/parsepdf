@@ -339,7 +339,64 @@ export function logSaveSelection(path: string, text: string) {
 }
 
 export function processPdf(inputPath: string, engineId?: string) {
-  return invoke<JobSummary>("process_pdf", { inputPath, engineId });
+  console.info("[ipc] processPdf invoke", { inputPath, engineId });
+  const startedAt = Date.now();
+  return invoke<JobSummary>("process_pdf", { inputPath, engineId }).then(
+    (summary) => {
+      console.info("[ipc] processPdf resolved", {
+        inputPath,
+        jobId: summary.id,
+        documentId: summary.document_id,
+        durationMs: Date.now() - startedAt,
+      });
+      return summary;
+    },
+    (error) => {
+      console.error("[ipc] processPdf rejected", { inputPath, error });
+      throw error;
+    },
+  );
+}
+
+export type DebugDocument = {
+  id: number;
+  sha256_short: string;
+  original_path: string;
+  output_path: string | null;
+  display_name: string | null;
+  status: string;
+  page_count: number;
+  ingested_at: number;
+  updated_at: number;
+};
+
+export type DebugJob = {
+  id: number;
+  document_id: number | null;
+  kind: string;
+  status: string;
+  origin: string;
+  engine: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  error_message: string | null;
+};
+
+export type DebugStateDump = {
+  db_path: string;
+  documents: DebugDocument[];
+  jobs: DebugJob[];
+  documents_count: number;
+  jobs_count: number;
+};
+
+export function debugDumpState() {
+  return invoke<DebugStateDump>("debug_dump_state");
+}
+
+export function debugResetLibrary() {
+  return invoke<number>("debug_reset_library");
 }
 
 export function listOcrEngines() {

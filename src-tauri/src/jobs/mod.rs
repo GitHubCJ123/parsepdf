@@ -194,12 +194,21 @@ impl JobManager {
     }
 
     pub async fn enqueue_ingest(&self, job: IngestJob) -> Result<JobSummary, JobError> {
-        let (document_id, job_id) = create_queued_job(
-            &self.db_path,
-            &canonical_pdf_path(&job.source_path)?,
-            job.origin,
-            job.engine.as_deref(),
-        )?;
+        let canonical = canonical_pdf_path(&job.source_path)?;
+        info!(
+            source_path = %job.source_path.display(),
+            canonical = %canonical.display(),
+            origin = job.origin.as_str(),
+            engine = job.engine.as_deref().unwrap_or("(default)"),
+            "enqueue_ingest called"
+        );
+        let (document_id, job_id) =
+            create_queued_job(&self.db_path, &canonical, job.origin, job.engine.as_deref())?;
+        info!(
+            document_id,
+            job_id,
+            "enqueue_ingest -> create_queued_job returned"
+        );
         self.run_tx
             .send(job_id)
             .await
@@ -512,6 +521,13 @@ fn create_queued_job(
     engine: Option<&str>,
 ) -> Result<(i64, i64), JobError> {
     let sha256 = pdf_pipeline::compute_sha256(input_path)?;
+    info!(
+        input_path = %input_path.display(),
+        sha256_short = &sha256[..16.min(sha256.len())],
+        origin = origin.as_str(),
+        engine = engine.unwrap_or("(default)"),
+        "create_queued_job entered"
+    );
     let mut connection = db::open_connection_at(db_path)?;
     let transaction = connection.transaction()?;
     let now = now_ts();
@@ -524,6 +540,10 @@ fn create_queued_job(
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
+    info!(
+        existing_document = ?existing.as_ref().map(|(id, _)| *id),
+        "create_queued_job sha256 lookup"
+    );
 
     if let Some((existing_doc_id, _)) = &existing {
         let active_job_id = transaction
@@ -539,13 +559,18 @@ fn create_queued_job(
             transaction.commit()?;
             info!(
                 document_id = *existing_doc_id,
-                job_id, "active job already exists for this PDF; returning existing job"
+                job_id, "DEDUP: active job already exists for this PDF; returning existing job"
             );
             return Ok((*existing_doc_id, job_id));
         }
     }
 
     let (document_id, previous_output_path) = if let Some((document_id, output_path)) = existing {
+        info!(
+            document_id,
+            previous_output_path = output_path.as_deref().unwrap_or("(none)"),
+            "REPROCESS: existing document, resetting state for new run"
+        );
         transaction.execute(
             "UPDATE documents
              SET original_path = ?2,
@@ -586,7 +611,9 @@ fn create_queued_job(
              VALUES(?1, ?2, 0, 'queued', ?3, ?3)",
             params![sha256, original_path, now],
         )?;
-        (transaction.last_insert_rowid(), None)
+        let id = transaction.last_insert_rowid();
+        info!(document_id = id, "NEW: inserted new document row");
+        (id, None)
     };
 
     transaction.execute(
@@ -596,6 +623,7 @@ fn create_queued_job(
     )?;
     let job_id = transaction.last_insert_rowid();
     transaction.commit()?;
+    info!(document_id, job_id, "create_queued_job committed new job");
 
     if let Some(path) = previous_output_path {
         let path = PathBuf::from(path);

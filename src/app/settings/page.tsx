@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { EngineSelector } from "@/components/engine-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { aiHealthCheck, aiListModels, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, watcherAddFolder, watcherListFolders, watcherRemoveFolder, watcherScanNow, watcherSetEnabled, type EngineInfo, type FolderConfig } from "@/lib/ipc";
+import { aiHealthCheck, aiListModels, debugDumpState, debugResetLibrary, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, watcherAddFolder, watcherListFolders, watcherRemoveFolder, watcherScanNow, watcherSetEnabled, type DebugStateDump, type EngineInfo, type FolderConfig } from "@/lib/ipc";
 import { getSetting, setSetting } from "@/lib/db";
 import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -208,6 +208,7 @@ export function SettingsPage() {
       ["appearance", "Appearance"],
       ["updates", "Updates"],
       ["about", "About"],
+      ["diagnostics", "Diagnostics"],
     ] as const,
     [],
   );
@@ -405,9 +406,102 @@ export function SettingsPage() {
             </div>
           </SettingsCard>
         )}
+        {activeSection === "diagnostics" && <DiagnosticsCard />}
         <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       </main>
     </div>
+  );
+}
+
+function DiagnosticsCard() {
+  const [dump, setDump] = useState<DebugStateDump | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const state = await debugDumpState();
+      setDump(state);
+    } catch (error) {
+      console.error("[diagnostics] dump failed", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function reset() {
+    setResetting(true);
+    try {
+      const deleted = await debugResetLibrary();
+      notifySuccess(`Wiped ${deleted} document${deleted === 1 ? "" : "s"} and all related rows.`);
+      setConfirmReset(false);
+      await refresh();
+    } catch (error) {
+      console.error("[diagnostics] reset failed", error);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const docsById = new Map((dump?.documents ?? []).map((doc) => [doc.id, doc]));
+  const grouped = new Map<number | null, DebugStateDump["jobs"]>();
+  for (const job of dump?.jobs ?? []) {
+    const key = job.document_id;
+    const list = grouped.get(key) ?? [];
+    list.push(job);
+    grouped.set(key, list);
+  }
+
+  return (
+    <SettingsCard title="Diagnostics" eyebrow="State and reset">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" onClick={() => void refresh()} disabled={loading}>{loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Dump current state</Button>
+          {!confirmReset ? (
+            <Button type="button" variant="destructive" onClick={() => setConfirmReset(true)} disabled={resetting}>Reset library</Button>
+          ) : (
+            <>
+              <Button type="button" variant="destructive" onClick={() => void reset()} disabled={resetting}>{resetting ? <Loader2 className="size-4 animate-spin" /> : null}Confirm: delete all documents</Button>
+              <Button type="button" variant="ghost" onClick={() => setConfirmReset(false)} disabled={resetting}>Cancel</Button>
+            </>
+          )}
+        </div>
+        {dump ? (
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-border bg-background/40 p-3 font-mono text-xs text-muted-foreground">
+              <div>db: {dump.db_path}</div>
+              <div>{dump.documents_count} document{dump.documents_count === 1 ? "" : "s"} · {dump.jobs_count} job{dump.jobs_count === 1 ? "" : "s"}</div>
+            </div>
+            {[...grouped.entries()].map(([docId, jobList]) => {
+              const doc = docId == null ? null : docsById.get(docId) ?? null;
+              return (
+                <div key={`doc-${docId ?? "none"}`} className="rounded-lg border border-border bg-background/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-mono text-xs text-foreground">{doc ? `doc#${doc.id} · ${doc.sha256_short}…` : "(no document)"}</p>
+                    <p className="font-mono text-[11px] text-muted-foreground">{doc?.status ?? "—"} · {doc?.page_count ?? 0} pages</p>
+                  </div>
+                  {doc ? <p className="mt-1 truncate text-xs text-muted-foreground" title={doc.original_path}>orig: {doc.original_path}</p> : null}
+                  {doc?.output_path ? <p className="truncate text-xs text-muted-foreground" title={doc.output_path}>out: {doc.output_path}</p> : null}
+                  <ul className="mt-2 space-y-1">
+                    {jobList.map((job) => (
+                      <li key={job.id} className="flex items-center justify-between rounded border border-border/60 bg-card/40 px-2 py-1 font-mono text-[11px]">
+                        <span>job#{job.id} · {job.status} · {job.origin}{job.engine ? ` · ${job.engine}` : ""}</span>
+                        <span className="text-muted-foreground">{new Date(job.created_at * 1000).toLocaleTimeString()}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+            {dump.jobs.length === 0 && dump.documents.length === 0 ? <p className="text-muted-foreground">No documents or jobs yet.</p> : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Click "Dump current state" to inspect the DB rows behind the inbox queue. Use "Reset library" to wipe everything (documents, jobs, pages, chunks, embeddings) and start clean.</p>
+        )}
+      </div>
+    </SettingsCard>
   );
 }
 

@@ -133,6 +133,8 @@ pub fn run() {
             commands::library::library_pending_renames,
             commands::library::library_skip_rename,
             commands::process::process_pdf,
+            commands::debug::debug_dump_state,
+            commands::debug::debug_reset_library,
             commands::chat::chat_get_thread,
             commands::chat::chat_list_threads,
             commands::chat::chat_send,
