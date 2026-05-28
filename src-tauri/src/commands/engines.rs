@@ -237,8 +237,8 @@ mod tests {
             vec![ModelFile {
                 url: "https://example.com/model.onnx",
                 relative_path: "det/model.onnx",
-                sha256: Box::leak(hash.into_boxed_str()),
-                size: 5,
+                sha256: Some(Box::leak(hash.into_boxed_str())),
+                size: Some(5),
             }]
             .into_boxed_slice(),
         );

@@ -17,7 +17,7 @@ default = []
 rapidocr = ["dep:imageproc", "dep:ndarray", "dep:ort"]
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }
 serde = { version = "1", features = ["derive"] }

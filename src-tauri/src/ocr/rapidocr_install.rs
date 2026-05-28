@@ -52,10 +52,21 @@ pub enum InstallError {
     Json(#[from] serde_json::Error),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct InstalledMarker {
     version: String,
     completed_at_unix: u64,
+    /// Map of relative_path -> recorded {sha256, size} captured during install.
+    /// Used for trust-on-first-use verification of files whose pinned hashes
+    /// were not known at build time.
+    #[serde(default)]
+    files: std::collections::BTreeMap<String, RecordedFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct RecordedFile {
+    sha256: String,
+    size: u64,
 }
 
 pub async fn install_rapidocr(
@@ -68,11 +79,26 @@ pub async fn install_rapidocr(
 
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(60))
-        .read_timeout(Duration::from_secs(60))
+        .read_timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
-    let total_bytes = manifest.files.iter().map(|file| file.size).sum::<u64>();
+    // For pinned files we know the size; otherwise we'll discover sizes from
+    // Content-Length headers, so total_bytes starts at 0 and grows as we go.
+    let known_total = manifest
+        .files
+        .iter()
+        .map(|file| file.size.unwrap_or(0))
+        .sum::<u64>();
+    let mut total_bytes = known_total.max(1);
     let mut aggregate_done = 0_u64;
+
+    let mut recorded = read_marker(target_dir).unwrap_or_default();
+    recorded.files.retain(|key, _| {
+        manifest
+            .files
+            .iter()
+            .any(|file| file.relative_path == key.as_str())
+    });
 
     progress(InstallProgress {
         phase: "starting".to_string(),
@@ -83,8 +109,19 @@ pub async fn install_rapidocr(
 
     for file in manifest.files {
         let final_path = manifest_file_path(target_dir, file)?;
-        if final_path.exists() && verify_model_file(&final_path, file).is_ok() {
-            aggregate_done = aggregate_done.saturating_add(file.size);
+        if final_path.exists()
+            && verify_model_file(&final_path, file, recorded.files.get(file.relative_path)).is_ok()
+        {
+            let file_size = recorded
+                .files
+                .get(file.relative_path)
+                .map(|recorded| recorded.size)
+                .or(file.size)
+                .unwrap_or_else(|| {
+                    fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0)
+                });
+            aggregate_done = aggregate_done.saturating_add(file_size);
+            total_bytes = total_bytes.max(aggregate_done);
             progress(InstallProgress {
                 phase: "verified".to_string(),
                 bytes_done: aggregate_done,
@@ -115,7 +152,16 @@ pub async fn install_rapidocr(
             current_file: Some(file.relative_path.to_string()),
         });
 
-        let response = client.get(file.url).send().await?.error_for_status()?;
+        let response = client
+            .get(file.url)
+            .send()
+            .await
+            .map_err(InstallError::Http)?
+            .error_for_status()
+            .map_err(InstallError::Http)?;
+        if let Some(content_length) = response.content_length() {
+            total_bytes = total_bytes.max(aggregate_done.saturating_add(content_length));
+        }
         let mut body = response.bytes_stream();
         let mut tmp_file = tokio::fs::File::create(&tmp_path).await?;
         let mut hasher = Sha256::new();
@@ -126,6 +172,7 @@ pub async fn install_rapidocr(
             file_done = file_done.saturating_add(chunk.len() as u64);
             hasher.update(&chunk);
             tmp_file.write_all(&chunk).await?;
+            total_bytes = total_bytes.max(aggregate_done.saturating_add(file_done));
             progress(InstallProgress {
                 phase: "downloading".to_string(),
                 bytes_done: aggregate_done.saturating_add(file_done),
@@ -137,19 +184,33 @@ pub async fn install_rapidocr(
         drop(tmp_file);
 
         let actual_hash = format!("{:x}", hasher.finalize());
-        if !actual_hash.eq_ignore_ascii_case(file.sha256) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(InstallError::HashMismatch {
-                path: tmp_path,
-                expected: file.sha256.to_string(),
-                actual: actual_hash,
-            });
+        // Pinned-hash mismatch is always a hard failure.
+        if let Some(expected) = file.sha256 {
+            if !actual_hash.eq_ignore_ascii_case(expected) {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(InstallError::HashMismatch {
+                    path: tmp_path,
+                    expected: expected.to_string(),
+                    actual: actual_hash,
+                });
+            }
         }
-        if file_done != file.size {
+        if let Some(expected_size) = file.size {
+            if file_done != expected_size {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(InstallError::SizeMismatch {
+                    path: tmp_path,
+                    expected: expected_size,
+                    actual: file_done,
+                });
+            }
+        }
+        // Sanity-check the file is large enough to plausibly be a model.
+        if file_done < 1024 {
             let _ = fs::remove_file(&tmp_path);
             return Err(InstallError::SizeMismatch {
                 path: tmp_path,
-                expected: file.size,
+                expected: 1024,
                 actual: file_done,
             });
         }
@@ -158,8 +219,14 @@ pub async fn install_rapidocr(
             fs::remove_file(&final_path)?;
         }
         fs::rename(&tmp_path, &final_path)?;
-        verify_model_file(&final_path, file)?;
-        aggregate_done = aggregate_done.saturating_add(file.size);
+        recorded.files.insert(
+            file.relative_path.to_string(),
+            RecordedFile {
+                sha256: actual_hash,
+                size: file_done,
+            },
+        );
+        aggregate_done = aggregate_done.saturating_add(file_done);
         progress(InstallProgress {
             phase: "verified".to_string(),
             bytes_done: aggregate_done,
@@ -168,7 +235,7 @@ pub async fn install_rapidocr(
         });
     }
 
-    write_marker(target_dir, manifest)?;
+    write_marker(target_dir, manifest, &recorded.files)?;
     progress(InstallProgress {
         phase: "complete".to_string(),
         bytes_done: total_bytes,
@@ -180,9 +247,10 @@ pub async fn install_rapidocr(
 
 pub fn verify_install_dir(target_dir: &Path, manifest: &ModelManifest) -> Result<(), InstallError> {
     validate_manifest(manifest)?;
+    let recorded = read_marker(target_dir).unwrap_or_default();
     for file in manifest.files {
         let path = manifest_file_path(target_dir, file)?;
-        verify_model_file(&path, file)?;
+        verify_model_file(&path, file, recorded.files.get(file.relative_path))?;
     }
     Ok(())
 }
@@ -227,27 +295,42 @@ fn validate_manifest(manifest: &ModelManifest) -> Result<(), InstallError> {
     Ok(())
 }
 
-fn verify_model_file(path: &Path, file: &ModelFile) -> Result<(), InstallError> {
+fn verify_model_file(
+    path: &Path,
+    file: &ModelFile,
+    recorded: Option<&RecordedFile>,
+) -> Result<(), InstallError> {
     if !path.exists() {
         return Err(InstallError::MissingFile {
             path: path.to_path_buf(),
         });
     }
     let actual_size = fs::metadata(path)?.len();
-    if actual_size != file.size {
-        return Err(InstallError::SizeMismatch {
-            path: path.to_path_buf(),
-            expected: file.size,
-            actual: actual_size,
-        });
+    // Determine the effective expected size: pinned > recorded > skip.
+    let expected_size = file.size.or_else(|| recorded.map(|r| r.size));
+    if let Some(expected) = expected_size {
+        if actual_size != expected {
+            return Err(InstallError::SizeMismatch {
+                path: path.to_path_buf(),
+                expected,
+                actual: actual_size,
+            });
+        }
     }
-    let actual_hash = sha256_file(path)?;
-    if !actual_hash.eq_ignore_ascii_case(file.sha256) {
-        return Err(InstallError::HashMismatch {
-            path: path.to_path_buf(),
-            expected: file.sha256.to_string(),
-            actual: actual_hash,
-        });
+    // Determine the effective expected hash: pinned > recorded > skip.
+    let expected_hash = file
+        .sha256
+        .map(str::to_string)
+        .or_else(|| recorded.map(|r| r.sha256.clone()));
+    if let Some(expected) = expected_hash {
+        let actual_hash = sha256_file(path)?;
+        if !actual_hash.eq_ignore_ascii_case(&expected) {
+            return Err(InstallError::HashMismatch {
+                path: path.to_path_buf(),
+                expected,
+                actual: actual_hash,
+            });
+        }
     }
     Ok(())
 }
@@ -268,13 +351,23 @@ fn safe_relative_path(relative_path: &str) -> Result<PathBuf, InstallError> {
     Ok(safe)
 }
 
-fn write_marker(target_dir: &Path, manifest: &ModelManifest) -> Result<(), InstallError> {
+fn read_marker(target_dir: &Path) -> Option<InstalledMarker> {
+    let raw = fs::read(target_dir.join(".installed.json")).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+fn write_marker(
+    target_dir: &Path,
+    manifest: &ModelManifest,
+    files: &std::collections::BTreeMap<String, RecordedFile>,
+) -> Result<(), InstallError> {
     let marker = InstalledMarker {
         version: manifest.version.to_string(),
         completed_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
+        files: files.clone(),
     };
     let json = serde_json::to_vec_pretty(&marker)?;
     fs::write(target_dir.join(".installed.json"), json)?;
@@ -299,8 +392,8 @@ mod tests {
             vec![ModelFile {
                 url: "https://example.com/model.onnx",
                 relative_path: "det/model.onnx",
-                sha256: hash,
-                size: bytes.len() as u64,
+                sha256: Some(hash),
+                size: Some(bytes.len() as u64),
             }]
             .into_boxed_slice(),
         );
@@ -326,8 +419,8 @@ mod tests {
             vec![ModelFile {
                 url: "https://example.com/model.onnx",
                 relative_path: "rec/model.onnx",
-                sha256: hash,
-                size: good.len() as u64,
+                sha256: Some(hash),
+                size: Some(good.len() as u64),
             }]
             .into_boxed_slice(),
         );
@@ -356,8 +449,8 @@ mod tests {
             vec![ModelFile {
                 url: "https://example.com/model.onnx",
                 relative_path: "cls/model.onnx",
-                sha256: hash,
-                size: 13,
+                sha256: Some(hash),
+                size: Some(13),
             }]
             .into_boxed_slice(),
         );
