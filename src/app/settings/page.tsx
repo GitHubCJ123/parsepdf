@@ -199,6 +199,29 @@ export function SettingsPage() {
     }
   }
 
+  // Auto-discover Ollama models whenever the AI tab is opened or the base URL changes.
+  // Failures are silent (Ollama may simply not be running); the user can still type a model name.
+  useEffect(() => {
+    if (activeSection !== "ai") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const models = await aiListModels("ollama");
+        if (cancelled) return;
+        setOllamaModels(models);
+        if (models.length > 0 && !models.includes(ollamaModel)) {
+          setOllamaModel(models[0]);
+          await setSetting("ollama.model", models[0]);
+        }
+      } catch {
+        // Ignored: silent failure (e.g. Ollama not running). User still has manual input.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, ollamaBaseUrl]);
+
   const sections = useMemo(
     () => [
       ["ocr", "OCR"],
@@ -363,10 +386,23 @@ export function SettingsPage() {
                 </label>
                 <label className="space-y-2">
                   <span className="text-sm font-medium">Model</span>
-                  <Input list="ollama-models" value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} />
-                  <datalist id="ollama-models">
-                    {[...new Set(["llama3.1", ...ollamaModels])].map((model) => <option key={model} value={model} />)}
-                  </datalist>
+                  {ollamaModels.length > 0 ? (
+                    <select
+                      value={ollamaModels.includes(ollamaModel) ? ollamaModel : ollamaModels[0]}
+                      onChange={(event) => setOllamaModel(event.target.value)}
+                      className="flex h-9 w-full rounded-md border border-border bg-card px-3 py-1 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {ollamaModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  ) : (
+                    <>
+                      <Input list="ollama-models" value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} placeholder="No installed models detected" />
+                      <datalist id="ollama-models">
+                        {[...new Set(["llama3.1", ...ollamaModels])].map((model) => <option key={model} value={model} />)}
+                      </datalist>
+                      <p className="text-xs text-muted-foreground">Run an Ollama model first (e.g. <code className="font-mono">ollama pull llama3.1</code>) then test the connection.</p>
+                    </>
+                  )}
                 </label>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={() => void saveOllama()}>Save</Button>

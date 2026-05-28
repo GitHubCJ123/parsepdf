@@ -582,13 +582,35 @@ fn replace_page_records(
     Ok(())
 }
 
+// Cache a Pdfium instance per worker thread. pdfium-render's bindings aren't
+// thread-safe, so they can't be shared. But binding once per thread (and reusing
+// across every page on that thread) is dramatically cheaper than reloading the
+// DLL per page and avoids the resource leaks that show up under repeated rebind.
+thread_local! {
+    static PDFIUM: std::cell::OnceCell<Pdfium> = const { std::cell::OnceCell::new() };
+}
+
+fn with_pdfium<R>(
+    pdfium_path: &Path,
+    body: impl FnOnce(&Pdfium) -> Result<R, PipelineError>,
+) -> Result<R, PipelineError> {
+    PDFIUM.with(|cell| {
+        if cell.get().is_none() {
+            let bindings = Pdfium::bind_to_library(pdfium_path).map_err(map_pdfium_error)?;
+            let _ = cell.set(Pdfium::new(bindings));
+        }
+        body(cell.get().expect("pdfium just initialized"))
+    })
+}
+
 async fn load_page_count(pdfium_path: PathBuf, input_path: PathBuf) -> Result<u16, PipelineError> {
     task::spawn_blocking(move || {
-        let pdfium = open_pdfium(&pdfium_path)?;
-        let document = pdfium
-            .load_pdf_from_file(&input_path, None)
-            .map_err(map_pdfium_error)?;
-        Ok(document.pages().len())
+        with_pdfium(&pdfium_path, |pdfium| {
+            let document = pdfium
+                .load_pdf_from_file(&input_path, None)
+                .map_err(map_pdfium_error)?;
+            Ok(document.pages().len())
+        })
     })
     .await
     .map_err(|error| PipelineError::Join(error.to_string()))?
@@ -613,57 +635,54 @@ fn extract_or_render_page_blocking(
     page_index: u16,
     dpi: u32,
 ) -> Result<PageExtraction, PipelineError> {
-    let pdfium = open_pdfium(pdfium_path)?;
-    let document = pdfium
-        .load_pdf_from_file(input_path, None)
-        .map_err(map_pdfium_error)?;
-    let page = document.pages().get(page_index).map_err(map_pdfium_error)?;
-    let rotation = page.rotation().map_err(map_pdfium_error)?.as_degrees() as i32;
-    let width_pt = page.width().value;
-    let height_pt = page.height().value;
-    let (image_width_px, image_height_px) = rendered_pixel_size(width_pt, height_pt, rotation, dpi);
-    let geometry = PageGeometry {
-        media_box: [0.0, 0.0, width_pt, height_pt],
-        crop_box: [0.0, 0.0, width_pt, height_pt],
-        rotation,
-        image_width_px,
-        image_height_px,
-        dpi,
-    };
+    with_pdfium(pdfium_path, |pdfium| {
+        let document = pdfium
+            .load_pdf_from_file(input_path, None)
+            .map_err(map_pdfium_error)?;
+        let page = document.pages().get(page_index).map_err(map_pdfium_error)?;
+        let rotation = page.rotation().map_err(map_pdfium_error)?.as_degrees() as i32;
+        let width_pt = page.width().value;
+        let height_pt = page.height().value;
+        let (image_width_px, image_height_px) =
+            rendered_pixel_size(width_pt, height_pt, rotation, dpi);
+        let geometry = PageGeometry {
+            media_box: [0.0, 0.0, width_pt, height_pt],
+            crop_box: [0.0, 0.0, width_pt, height_pt],
+            rotation,
+            image_width_px,
+            image_height_px,
+            dpi,
+        };
 
-    let native_text = page.text().map(|text| text.all()).unwrap_or_default();
-    if text_density(&native_text) > NATIVE_TEXT_THRESHOLD {
-        return Ok(PageExtraction::Native(PageNative {
-            text: native_text,
+        let native_text = page.text().map(|text| text.all()).unwrap_or_default();
+        if text_density(&native_text) > NATIVE_TEXT_THRESHOLD {
+            return Ok(PageExtraction::Native(PageNative {
+                text: native_text,
+                geometry,
+                width_px: image_width_px,
+                height_px: image_height_px,
+                rotation,
+            }));
+        }
+
+        let bitmap = page
+            .render_with_config(
+                &PdfRenderConfig::new()
+                    .set_target_width(image_width_px as i32)
+                    .set_target_height(image_height_px as i32)
+                    .render_form_data(true),
+            )
+            .map_err(map_pdfium_error)?;
+        let image = bitmap.as_image().into_rgba8();
+
+        Ok(PageExtraction::Rasterized(PageRasterized {
+            image,
             geometry,
             width_px: image_width_px,
             height_px: image_height_px,
             rotation,
-        }));
-    }
-
-    let bitmap = page
-        .render_with_config(
-            &PdfRenderConfig::new()
-                .set_target_width(image_width_px as i32)
-                .set_target_height(image_height_px as i32)
-                .render_form_data(true),
-        )
-        .map_err(map_pdfium_error)?;
-    let image = bitmap.as_image().into_rgba8();
-
-    Ok(PageExtraction::Rasterized(PageRasterized {
-        image,
-        geometry,
-        width_px: image_width_px,
-        height_px: image_height_px,
-        rotation,
-    }))
-}
-
-fn open_pdfium(pdfium_path: &Path) -> Result<Pdfium, PipelineError> {
-    let bindings = Pdfium::bind_to_library(pdfium_path).map_err(map_pdfium_error)?;
-    Ok(Pdfium::new(bindings))
+        }))
+    })
 }
 
 fn rendered_pixel_size(width_pt: f32, height_pt: f32, rotation: i32, dpi: u32) -> (u32, u32) {

@@ -90,7 +90,7 @@ export function InboxPage() {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     try {
-      const rows = await jobsList({ limit: 750 });
+      const rows = await jobsList({ limit: 250 });
       setJobs((current) => mergeJobRows(current, rows));
     } finally {
       refreshInFlight.current = false;
@@ -103,7 +103,7 @@ export function InboxPage() {
 
   useEffect(() => {
     void refreshJobs();
-    const id = window.setInterval(() => void refreshJobs(), 2500);
+    const id = window.setInterval(() => void refreshJobs(), 5000);
     return () => window.clearInterval(id);
   }, [refreshJobs]);
 

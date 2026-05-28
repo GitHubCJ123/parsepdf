@@ -19,6 +19,10 @@ pub struct AppState {
 impl AppState {
     pub fn new(app: &AppHandle, db_path: PathBuf) -> anyhow::Result<Self> {
         let pdfium_path = resolve_pdfium_path(app)?;
+        // Smoke-test that the DLL can be loaded at startup. The actual per-thread
+        // Pdfium instances are created lazily inside the OCR pipeline via
+        // thread_local caching, so the DLL gets loaded once per worker thread
+        // and reused for every page on that thread.
         Pdfium::bind_to_library(&pdfium_path).with_context(|| {
             format!("failed to bind pdfium library at {}", pdfium_path.display())
         })?;

@@ -346,8 +346,42 @@ impl JobManager {
 
     async fn worker_loop(&self, mut rx: mpsc::Receiver<i64>) {
         while let Some(job_id) = rx.recv().await {
-            if let Err(error) = self.run_job(job_id).await {
-                warn!(job_id, error = %error, "job execution failed");
+            // Catch any panic that escapes run_job so a single bad PDF can't
+            // bring down the worker (and the rest of the queue with it).
+            let manager = self.clone();
+            let join = tokio::spawn(async move { manager.run_job(job_id).await });
+            match join.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(job_id, error = %error, "job execution failed"),
+                Err(join_error) if join_error.is_panic() => {
+                    warn!(job_id, "job panicked; marking it as error to keep the queue alive");
+                    let message = format!("Worker panicked: {join_error}");
+                    if let Some(document_id) = job_document_id(&self.db_path, job_id).ok().flatten()
+                    {
+                        let _ = mark_job_error(
+                            &self.db_path,
+                            job_id,
+                            Some(document_id),
+                            &message,
+                        );
+                        let _ = update_document_status(
+                            &self.db_path,
+                            document_id,
+                            JobStatus::Error.as_str(),
+                            Some(message.as_str()),
+                        );
+                    } else {
+                        let _ = mark_job_error(&self.db_path, job_id, None, &message);
+                    }
+                    self.state.progress.notify_lifecycle(JobLifecycle::new(
+                        job_id,
+                        job_document_id(&self.db_path, job_id).ok().flatten(),
+                        JobStatus::Error.as_str(),
+                        Some(message),
+                    ));
+                    self.active.write().await.remove(&job_id);
+                }
+                Err(join_error) => warn!(job_id, error = %join_error, "job task cancelled"),
             }
         }
     }

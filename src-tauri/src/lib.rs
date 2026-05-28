@@ -18,6 +18,26 @@ pub fn run() {
     let _log_guard = db::log_dir()
         .ok()
         .and_then(|path| logging::install_tracing_subscriber(&path).ok());
+
+    // Catch panics so they land in the log instead of silently killing the process.
+    // We still propagate to the default hook so debug-mode users see the panic
+    // in their dev console, but a logged panic at least leaves a trail to debug.
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic payload>");
+        tracing::error!(location = %location, payload = %payload, "PANIC");
+        default_panic(info);
+    }));
+
     db::register_sqlite_vec_auto_extension();
     let database_url = db::database_url().expect("failed to resolve PDF-Parser database path");
 

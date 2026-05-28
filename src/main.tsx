@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -7,11 +6,20 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./styles/globals.css";
+import { ErrorBoundary } from "./components/error-boundary";
 import { getDatabase } from "./lib/db";
 import { appPaths } from "./lib/ipc";
 import { router } from "./router";
 
 document.documentElement.classList.add("dark");
+
+// Surface promise rejections that would otherwise vanish into the void.
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("[unhandledrejection]", event.reason);
+});
+window.addEventListener("error", (event) => {
+  console.error("[window.error]", event.error ?? event.message);
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -64,6 +72,8 @@ function FatalStartupError({ message }: { message: string }) {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <Bootstrap />
+    <ErrorBoundary>
+      <Bootstrap />
+    </ErrorBoundary>
   </React.StrictMode>,
 );
