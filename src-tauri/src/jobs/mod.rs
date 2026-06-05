@@ -330,10 +330,7 @@ impl JobManager {
     }
 
     pub async fn clear_completed(&self) -> Result<u32, JobError> {
-        let connection = db::open_connection_at(&self.db_path)?;
-        let deleted =
-            connection.execute("DELETE FROM jobs WHERE status IN ('done', 'cancelled')", [])?;
-        Ok(deleted as u32)
+        clear_completed_jobs(&self.db_path)
     }
 
     async fn intake_loop(&self, mut rx: mpsc::Receiver<IngestJob>) {
@@ -789,6 +786,17 @@ fn mark_job_error(
     Ok(())
 }
 
+/// Delete every job in a terminal state (done, error, cancelled). Active jobs
+/// (queued, running, paused) are preserved. Returns the number of rows removed.
+fn clear_completed_jobs(db_path: &Path) -> Result<u32, JobError> {
+    let connection = db::open_connection_at(db_path)?;
+    let deleted = connection.execute(
+        "DELETE FROM jobs WHERE status IN ('done', 'error', 'cancelled')",
+        [],
+    )?;
+    Ok(deleted as u32)
+}
+
 fn update_document_status(
     db_path: &Path,
     document_id: i64,
@@ -1111,6 +1119,34 @@ mod tests {
             create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
         assert!(doc_id > 0);
         assert!(job_id > 0);
+    }
+
+    #[test]
+    fn clear_completed_removes_terminal_jobs_and_keeps_active_ones() {
+        let (_temp, db_path) = fixture_db();
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        for status in ["queued", "running", "paused", "done", "error", "cancelled"] {
+            conn.execute(
+                "INSERT INTO jobs(kind, status, created_at) VALUES('ingest', ?1, 1)",
+                params![status],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        // A queue of only failed jobs (the reported bug) must still be clearable.
+        let deleted = clear_completed_jobs(&db_path).unwrap();
+        assert_eq!(deleted, 3, "done, error, and cancelled jobs should be removed");
+
+        let conn = crate::db::open_connection_at(&db_path).unwrap();
+        let remaining: Vec<String> = conn
+            .prepare("SELECT status FROM jobs ORDER BY status")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(remaining, vec!["paused", "queued", "running"]);
     }
 
     #[test]

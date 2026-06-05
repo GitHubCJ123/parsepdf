@@ -138,6 +138,10 @@ export function InboxPage() {
   const scanLikeQueueCount = jobs.filter((job) => job.status === "running" && !job.page_count).length;
   const counts = useMemo(() => summarizeJobs(jobs), [jobs]);
   const failedJobs = useMemo(() => jobs.filter((job) => job.status === "error"), [jobs]);
+  const clearableCount = useMemo(
+    () => jobs.filter((job) => job.status === "done" || job.status === "error" || job.status === "cancelled").length,
+    [jobs],
+  );
   const filteredJobs = useMemo(() => filterJobs(jobs, filter), [jobs, filter]);
   const currentJob = useMemo(() => jobs.filter((job) => job.status === "running").sort((a, b) => (b.updated_at_ms ?? 0) - (a.updated_at_ms ?? 0))[0], [jobs]);
   const overallProgress = useMemo(() => {
@@ -216,8 +220,9 @@ export function InboxPage() {
   }
 
   async function clearCompleted() {
-    await jobsClearCompleted();
+    const cleared = await jobsClearCompleted();
     await refreshJobs();
+    notifySuccess(cleared === 0 ? "No completed jobs to clear." : `Cleared ${cleared} job${cleared === 1 ? "" : "s"}.`);
   }
 
   const persistentIssue = issueBannerForJobs(jobs);
@@ -284,7 +289,7 @@ export function InboxPage() {
             <Button type="button" variant="outline" onClick={() => void resumeAll()}><Play className="size-4" />Resume all</Button>
             <Button type="button" variant="outline" onClick={() => void retryFailed()} disabled={failedJobs.length === 0}><RotateCcw className="size-4" />Retry failed ({failedJobs.length})</Button>
             <Button type="button" variant="destructive" onClick={() => void cancelAll()} disabled={counts.active === 0}>Cancel all</Button>
-            <Button type="button" variant="ghost" onClick={() => void clearCompleted()}><Trash2 className="size-4" />Clear completed</Button>
+            <Button type="button" variant="ghost" onClick={() => void clearCompleted()} disabled={clearableCount === 0}><Trash2 className="size-4" />Clear completed ({clearableCount})</Button>
           </div>
         </div>
 

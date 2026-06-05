@@ -13,7 +13,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [features]
-default = []
+# RapidOCR inference is on by default so `pnpm tauri dev` and the release
+# installer both ship the ONNX engine. The ~179 MB model files are still an
+# opt-in *runtime* download (see MODELS.md); only the code path is compiled in.
+# The shared `ort` runtime is already linked via `fastembed`, so enabling this
+# adds no native download — just the imageproc/ndarray inference module.
+# Build a lean binary without it via `--no-default-features`.
+default = ["rapidocr"]
 rapidocr = ["dep:imageproc", "dep:ndarray", "dep:ort"]
 
 [dependencies]
