@@ -75,23 +75,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-sidebar-border p-3">
-        <div
-          className={cn(
-            "rounded-md border border-border bg-background/40 p-3",
-            collapsed && "px-2 py-3 text-center",
-          )}
-        >
-          <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-            Phase 0
-          </div>
-          {!collapsed && (
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Shell, SQLite, and IPC foundations are active.
-            </p>
-          )}
-        </div>
-      </div>
     </aside>
   );
 }

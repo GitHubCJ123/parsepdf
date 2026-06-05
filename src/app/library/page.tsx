@@ -3,11 +3,13 @@ import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from
 import { Link } from "@tanstack/react-router";
 import { format } from "date-fns";
 import { Library as LibraryIcon, Loader2, Search, Sparkles } from "lucide-react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { PdfPreviewDrawer } from "@/components/pdf-preview-drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { libraryDelete, libraryGet, libraryList, libraryPendingRenames, type DocumentDetail, type DocumentRow, type PendingRenameRow } from "@/lib/ipc";
+import { getSetting } from "@/lib/db";
 import { cn } from "@/lib/utils";
 
 export function LibraryPage() {
@@ -19,11 +21,13 @@ export function LibraryPage() {
   const [previewPage, setPreviewPage] = useState(1);
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   async function refresh() {
     setLoading(true);
     try {
-      const [rows, pending] = await Promise.all([libraryList(undefined, 300, 0), libraryPendingRenames()]);
+      const limit = parseLoadLimit(await getSetting("library.page_size"));
+      const [rows, pending] = await Promise.all([libraryList(undefined, limit, 0), libraryPendingRenames()]);
       setDocuments(rows);
       setPendingRenames(pending);
     } finally {
@@ -70,7 +74,20 @@ export function LibraryPage() {
   }, [documents, query]);
 
   async function deleteSelected(documentId: number) {
-    await libraryDelete(documentId, false);
+    const confirmSetting = await getSetting("library.confirm_delete");
+    const shouldConfirm = confirmSetting == null ? true : confirmSetting === "1";
+    if (shouldConfirm) {
+      // Open the in-app styled confirm modal. `window.confirm` is suppressed in
+      // the WebView2 runtime, and the native OS dialog looks out of place.
+      setPendingDelete(documentId);
+      return;
+    }
+    await performDelete(documentId);
+  }
+
+  async function performDelete(documentId: number) {
+    // Always remove the processed PDF from disk along with the DB record.
+    await libraryDelete(documentId, true);
     setSelectedId(null);
     await refresh();
   }
@@ -143,6 +160,18 @@ export function LibraryPage() {
       </section>
 
       <PdfPreviewDrawer detail={detail} loading={detailLoading} initialPage={previewPage} onClose={() => { setSelectedId(null); setPreviewPage(1); }} onDelete={deleteSelected} />
+
+      <ConfirmDialog
+        open={pendingDelete != null}
+        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
+        destructive
+        title="Delete document"
+        description="This permanently deletes the document and removes its searchable PDF from disk. This cannot be undone."
+        confirmLabel="Delete permanently"
+        onConfirm={async () => {
+          if (pendingDelete != null) await performDelete(pendingDelete);
+        }}
+      />
     </div>
   );
 }
@@ -167,6 +196,11 @@ function parsePositiveInt(value: string | null) {
   if (!value) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseLoadLimit(value: string | null) {
+  // Backend clamps to 1..500; default to 300 when unset or invalid.
+  return parsePositiveInt(value) ?? 300;
 }
 
 function formatBytes(value?: number | null) {

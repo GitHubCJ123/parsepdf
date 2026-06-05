@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, DownloadCloud, HardDrive, Loader2, RotateCcw, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -68,8 +69,9 @@ export function EngineSelector() {
   }
 
   async function remove(engine: EngineInfo) {
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       `Remove ${engine.name}? This reclaims about ${engine.size_mb} MB and you can reinstall it later.`,
+      { title: `Remove ${engine.name}`, kind: "warning" },
     );
     if (!confirmed) {
       return;

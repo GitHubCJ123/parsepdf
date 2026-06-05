@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Eye, EyeOff, FolderOpen, FolderPlus, Info, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { CheckCircle2, FolderOpen, FolderPlus, Info, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { EngineSelector } from "@/components/engine-selector";
@@ -11,16 +11,9 @@ import { getSetting, setSetting } from "@/lib/db";
 import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-const OPENROUTER_MODELS = [
-  "openai/gpt-4o-mini",
-  "anthropic/claude-3.5-haiku",
-  "google/gemini-flash-1.5",
-  "meta-llama/llama-3.1-8b-instruct",
-];
-
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 
-type Provider = "none" | "openrouter" | "ollama";
+type Provider = "none" | "ollama";
 type Status = "idle" | "testing" | "connected" | "not-configured" | "error";
 
 export function SettingsPage() {
@@ -29,11 +22,6 @@ export function SettingsPage() {
   const [outputDir, setOutputDir] = useState("");
   const [provider, setProvider] = useState<Provider>("none");
   const [aiNamingEnabled, setAiNamingEnabled] = useState(false);
-  const [openRouterKey, setOpenRouterKey] = useState("");
-  const [showOpenRouterKey, setShowOpenRouterKey] = useState(false);
-  const [openRouterModel, setOpenRouterModel] = useState("openai/gpt-4o-mini");
-  const [openRouterStatus, setOpenRouterStatus] = useState<Status>("idle");
-  const [openRouterMessage, setOpenRouterMessage] = useState("");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(DEFAULT_OLLAMA_URL);
   const [ollamaModel, setOllamaModel] = useState("llama3.1");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -47,22 +35,24 @@ export function SettingsPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [storedOutput, storedProvider, namingEnabled, orModel, ooModel, key, ollamaUrl] = await Promise.all([
+      const [storedOutput, storedProvider, namingEnabled, ooModel, ollamaUrl] = await Promise.all([
         getSetting("output_dir"),
         getSetting("ai.default_provider"),
         getSetting("ai.naming_enabled"),
-        getSetting("openrouter.model"),
         getSetting("ollama.model"),
-        secretsGet("openrouter.api_key").catch(() => null),
         secretsGet("ollama.base_url").catch(() => null),
       ]);
       if (cancelled) return;
       setOutputDir(storedOutput ?? "%USERPROFILE%\\Documents\\PDF-Parser\\Processed");
-      setProvider(isProvider(storedProvider) ? storedProvider : "none");
+      const validProvider = isProvider(storedProvider) ? storedProvider : "none";
+      setProvider(validProvider);
+      // Migrate away from the now-removed OpenRouter provider so AI naming
+      // falls back to a supported backend instead of a dead cloud config.
+      if (storedProvider != null && storedProvider !== validProvider) {
+        await setSetting("ai.default_provider", validProvider);
+      }
       setAiNamingEnabled(namingEnabled === "1" || namingEnabled === "true");
-      setOpenRouterModel(orModel ?? "openai/gpt-4o-mini");
       setOllamaModel(ooModel ?? "llama3.1");
-      setOpenRouterKey(key ?? "");
       setOllamaBaseUrl(ollamaUrl ?? DEFAULT_OLLAMA_URL);
     }
     void load();
@@ -133,36 +123,6 @@ export function SettingsPage() {
     notifySuccess("Watched folder removed.");
   }
 
-  async function saveOpenRouter() {
-    setOpenRouterStatus("testing");
-    setOpenRouterMessage("Saving securely…");
-    try {
-      if (openRouterKey.trim()) {
-        await secretsSet("openrouter.api_key", openRouterKey.trim());
-      } else {
-        await secretsDelete("openrouter.api_key");
-      }
-      await setSetting("openrouter.model", openRouterModel.trim() || "openai/gpt-4o-mini");
-      setOpenRouterStatus(openRouterKey.trim() ? "idle" : "not-configured");
-      setOpenRouterMessage(openRouterKey.trim() ? "Saved in Stronghold." : "No key stored.");
-    } catch (error) {
-      setOpenRouterStatus("error");
-      setOpenRouterMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function testOpenRouter() {
-    await saveOpenRouter();
-    try {
-      const ok = await aiHealthCheck("openrouter");
-      setOpenRouterStatus(ok ? "connected" : "not-configured");
-      setOpenRouterMessage(ok ? "Connected." : "Add an API key to enable OpenRouter.");
-    } catch (error) {
-      setOpenRouterStatus("error");
-      setOpenRouterMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
   async function saveOllama() {
     setOllamaStatus("testing");
     try {
@@ -228,7 +188,6 @@ export function SettingsPage() {
       ["ai", "AI providers"],
       ["folders", "Folders"],
       ["library", "Library"],
-      ["appearance", "Appearance"],
       ["updates", "Updates"],
       ["about", "About"],
       ["diagnostics", "Diagnostics"],
@@ -335,14 +294,13 @@ export function SettingsPage() {
         {activeSection === "ai" && (
           <SettingsCard title="AI providers" eyebrow="Review before rename">
             <div className="rounded-lg border border-border bg-background/45 p-4 text-sm leading-6 text-muted-foreground">
-              OpenRouter sends document text to a cloud API (paid). Ollama runs entirely on your machine (free, offline). API keys are stored in Stronghold; if the keychain is unavailable, cloud AI is disabled rather than saved as plaintext.
+              Ollama runs entirely on your machine — free, offline, and private. Point PDF-Parser at your local Ollama server and choose a model to enable AI naming.
             </div>
             <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">
               <label className="space-y-2">
                 <span className="text-sm font-medium">Default provider</span>
                 <select className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm" value={provider} onChange={(event) => void persistProvider(event.target.value as Provider)}>
                   <option value="none">None</option>
-                  <option value="openrouter">OpenRouter</option>
                   <option value="ollama">Ollama</option>
                 </select>
               </label>
@@ -352,33 +310,7 @@ export function SettingsPage() {
               </label>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              <ProviderCard title="OpenRouter" status={openRouterStatus} message={openRouterMessage} cloud>
-                <label className="space-y-2">
-                  <span className="text-sm font-medium">API key</span>
-                  <div className="flex gap-2">
-                    <Input type={showOpenRouterKey ? "text" : "password"} value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="sk-or-v1-…" />
-                    <Button type="button" variant="outline" onClick={() => setShowOpenRouterKey((shown) => !shown)} aria-label={showOpenRouterKey ? "Hide API key" : "Show API key"}>
-                      {showOpenRouterKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                    </Button>
-                  </div>
-                </label>
-                <label className="space-y-2">
-                  <span className="text-sm font-medium">Model</span>
-                  <Input list="openrouter-models" value={openRouterModel} onChange={(event) => setOpenRouterModel(event.target.value)} />
-                  <datalist id="openrouter-models">
-                    {OPENROUTER_MODELS.map((model) => <option key={model} value={model} />)}
-                  </datalist>
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={() => void saveOpenRouter()}>Save</Button>
-                  <Button type="button" onClick={() => void testOpenRouter()} disabled={openRouterStatus === "testing"}>
-                    {openRouterStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-                    Test connection
-                  </Button>
-                </div>
-              </ProviderCard>
-
+            <div className="grid gap-4">
               <ProviderCard title="Ollama" status={ollamaStatus} message={ollamaMessage}>
                 <label className="space-y-2">
                   <span className="text-sm font-medium">Base URL</span>
@@ -428,8 +360,7 @@ export function SettingsPage() {
             onRemove={(folder) => void removeWatchedFolder(folder)}
           />
         )}
-        {activeSection === "library" && <Stub title="Library defaults" text="Review, preview, delete, and copy-path actions live in the Library panel." />}
-        {activeSection === "appearance" && <Stub title="Appearance" text="Dark mode is locked for v0.1.0. Theme options are reserved for a later release." />}
+        {activeSection === "library" && <LibrarySettings />}
         {activeSection === "updates" && <Stub title="Updates" text="The updater checks signed GitHub release artifacts and prepares installs on quit." />}
         {activeSection === "about" && (
           <SettingsCard title="About" eyebrow="Version and logs">
@@ -446,6 +377,77 @@ export function SettingsPage() {
         <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       </main>
     </div>
+  );
+}
+
+function LibrarySettings() {
+  const [confirmDelete, setConfirmDelete] = useState(true);
+  const [pageSize, setPageSize] = useState("300");
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const [confirmValue, sizeValue] = await Promise.all([
+        getSetting("library.confirm_delete"),
+        getSetting("library.page_size"),
+      ]);
+      if (cancelled) return;
+      // Confirmation defaults ON so a brand-new install can't delete without asking.
+      setConfirmDelete(confirmValue == null ? true : confirmValue === "1");
+      setPageSize(sizeValue ?? "300");
+      setLoaded(true);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function persistConfirmDelete(value: boolean) {
+    setConfirmDelete(value);
+    await setSetting("library.confirm_delete", value ? "1" : "0");
+    notifySuccess("Library settings saved.");
+  }
+
+  async function persistPageSize(value: string) {
+    setPageSize(value);
+    await setSetting("library.page_size", value);
+    notifySuccess("Library settings saved.");
+  }
+
+  return (
+    <SettingsCard title="Library defaults" eyebrow="Archive behaviour">
+      <p className="text-sm leading-6 text-muted-foreground">
+        Control how the Library deletes documents and how many it loads at once. Preview, open, and copy-path actions live in the Library panel itself.
+      </p>
+
+      <div className="space-y-3">
+        <label className="flex items-start gap-3 rounded-lg border border-border bg-background/45 px-3 py-3 text-sm">
+          <input type="checkbox" className="mt-0.5" checked={confirmDelete} disabled={!loaded} onChange={(event) => void persistConfirmDelete(event.target.checked)} />
+          <span>
+            <span className="font-medium text-foreground">Confirm before deleting</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">Ask for confirmation before a document is removed. Deleting always removes the processed PDF from disk.</span>
+          </span>
+        </label>
+      </div>
+
+      <label className="space-y-2">
+        <span className="text-sm font-medium">Documents to load</span>
+        <select
+          className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm"
+          value={pageSize}
+          disabled={!loaded}
+          onChange={(event) => void persistPageSize(event.target.value)}
+        >
+          <option value="100">100</option>
+          <option value="200">200</option>
+          <option value="300">300</option>
+          <option value="500">500</option>
+        </select>
+        <p className="text-xs text-muted-foreground">How many of the most recent documents to fetch when opening the Library.</p>
+      </label>
+    </SettingsCard>
   );
 }
 
@@ -676,6 +678,6 @@ function Stub({ title, text }: { title: string; text: string }) {
 }
 
 function isProvider(value: string | null): value is Provider {
-  return value === "none" || value === "openrouter" || value === "ollama";
+  return value === "none" || value === "ollama";
 }
 
