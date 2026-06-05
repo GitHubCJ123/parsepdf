@@ -53,6 +53,10 @@ pub struct ChatResponse {
     pub model: String,
     pub tokens_in: Option<u32>,
     pub tokens_out: Option<u32>,
+    /// The model's reasoning, when "thinking" was requested and the model
+    /// supports it (Ollama returns this separately from `content`).
+    #[serde(default)]
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -86,6 +90,7 @@ pub trait AiProvider: Send + Sync {
     async fn stream_chat(
         &self,
         messages: Vec<ChatMessage>,
+        think: Option<bool>,
         token_callback: Box<dyn Fn(String) + Send + Sync>,
     ) -> Result<ChatResponse, AiError>;
     async fn health_check(&self) -> Result<(), AiError>;
@@ -187,11 +192,27 @@ pub fn configured_provider(
     db_path: &Path,
     requested: Option<&str>,
 ) -> Result<DynProvider, AiError> {
+    configured_provider_with_model(db_path, requested, None)
+}
+
+/// Like [`configured_provider`], but allows the caller to override the model
+/// (e.g. a per-chat model picked in the UI). An empty/`None` override falls back
+/// to the provider's saved default model setting.
+pub fn configured_provider_with_model(
+    db_path: &Path,
+    requested: Option<&str>,
+    model_override: Option<&str>,
+) -> Result<DynProvider, AiError> {
     let provider = requested
         .map(|value| value.split(':').next().unwrap_or(value).to_string())
         .or_else(|| setting(db_path, "ai.default_provider").ok().flatten())
         .unwrap_or_else(|| "none".to_string())
         .to_lowercase();
+
+    let model_override = model_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
     match provider.as_str() {
         "openrouter" => {
@@ -199,9 +220,13 @@ pub fn configured_provider(
                 .map_err(|error| AiError::Unavailable(error.to_string()))?
                 .filter(|value| !value.trim().is_empty())
                 .ok_or(AiError::NotConfigured)?;
-            let model = setting(db_path, "openrouter.model")
-                .map_err(|error| AiError::Unavailable(error.to_string()))?
-                .filter(|value| !value.trim().is_empty())
+            let model = model_override
+                .or_else(|| {
+                    setting(db_path, "openrouter.model")
+                        .ok()
+                        .flatten()
+                        .filter(|value| !value.trim().is_empty())
+                })
                 .unwrap_or_else(|| DEFAULT_OPENROUTER_MODEL.to_string());
             Ok(Arc::new(openrouter::OpenRouterProvider::new(
                 api_key, model,
@@ -212,9 +237,12 @@ pub fn configured_provider(
                 .map_err(|error| AiError::Unavailable(error.to_string()))?
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
-            let model = setting(db_path, "ollama.model")
-                .map_err(|error| AiError::Unavailable(error.to_string()))?
-                .filter(|value| !value.trim().is_empty());
+            let model = model_override.or_else(|| {
+                setting(db_path, "ollama.model")
+                    .ok()
+                    .flatten()
+                    .filter(|value| !value.trim().is_empty())
+            });
             Ok(Arc::new(ollama::OllamaProvider::new(base_url, model)))
         }
         _ => Err(AiError::NotConfigured),

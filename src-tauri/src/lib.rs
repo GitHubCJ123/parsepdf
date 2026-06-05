@@ -157,6 +157,7 @@ pub fn run() {
             commands::debug::debug_dump_state,
             commands::debug::debug_reset_library,
             commands::chat::chat_get_thread,
+            commands::chat::chat_delete_thread,
             commands::chat::chat_list_threads,
             commands::chat::chat_send,
             commands::chat::chat_status,

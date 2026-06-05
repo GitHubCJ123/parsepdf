@@ -281,6 +281,7 @@ export type ChatMessageEndEvent = {
   citations: ChatCitation[];
   retrieval_ms: number;
   generation_ms: number;
+  thinking?: string | null;
 };
 
 export type EngineInstallProgressEvent = {
@@ -560,8 +561,12 @@ export function chatGetThread(threadId: number) {
   return invoke<ChatThreadDetail>("chat_get_thread", { threadId });
 }
 
-export function chatSend(threadId: number | null, message: string, providerId: string, docFilter?: DocFilter | null) {
-  return invoke<number>("chat_send", { threadId, message, providerId, docFilter: docFilter ?? null });
+export function chatDeleteThread(threadId: number) {
+  return invoke<void>("chat_delete_thread", { threadId });
+}
+
+export function chatSend(threadId: number | null, message: string, providerId: string, docFilter?: DocFilter | null, think?: boolean | null) {
+  return invoke<number>("chat_send", { threadId, message, providerId, docFilter: docFilter ?? null, think: think ?? null });
 }
 
 export function listenChatMessageStart(handler: (payload: ChatMessageStartEvent) => void): Promise<UnlistenFn> {

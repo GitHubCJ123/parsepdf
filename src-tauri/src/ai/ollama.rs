@@ -136,20 +136,46 @@ impl AiProvider for OllamaProvider {
     async fn stream_chat(
         &self,
         messages: Vec<AiChatMessage>,
+        think: Option<bool>,
         token_callback: Box<dyn Fn(String) + Send + Sync>,
     ) -> Result<AiChatResponse, AiError> {
         let model = self.resolve_model().await?;
+        let url = format!("{}/api/chat", self.base_url);
+        let base_body = json!({
+            "model": model,
+            "stream": true,
+            "messages": messages,
+        });
+        let mut body = base_body.clone();
+        if let Some(think) = think {
+            body["think"] = json!(think);
+        }
         let response = self
             .stream_client
-            .post(format!("{}/api/chat", self.base_url))
-            .json(&json!({
-                "model": model,
-                "stream": true,
-                "messages": messages,
-            }))
+            .post(&url)
+            .json(&body)
             .send()
             .await
             .map_err(map_stream_transport_error)?;
+
+        // Models without a reasoning capability reject the `think` parameter with
+        // a 400. Rather than fail the chat, transparently retry without it so the
+        // toggle degrades to normal behaviour on non-thinking models.
+        let response = if think.is_some() && response.status() == StatusCode::BAD_REQUEST {
+            let detail = response.text().await.unwrap_or_default();
+            if detail.to_lowercase().contains("think") {
+                self.stream_client
+                    .post(&url)
+                    .json(&base_body)
+                    .send()
+                    .await
+                    .map_err(map_stream_transport_error)?
+            } else {
+                return Err(AiError::Unavailable(format!("Ollama returned 400: {detail}")));
+            }
+        } else {
+            response
+        };
 
         match response.status() {
             StatusCode::OK => stream_ollama_response(response, &model, token_callback).await,
@@ -171,6 +197,7 @@ async fn stream_ollama_response(
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut content = String::new();
+    let mut thinking = String::new();
     let mut tokens_in = None;
     let mut tokens_out = None;
 
@@ -186,6 +213,9 @@ async fn stream_ollama_response(
             let chunk = serde_json::from_str::<OllamaStreamChunk>(&line)
                 .map_err(|error| AiError::InvalidResponse(error.to_string()))?;
             if let Some(message) = chunk.message {
+                if let Some(reason) = message.thinking.filter(|value| !value.is_empty()) {
+                    thinking.push_str(&reason);
+                }
                 if let Some(delta) = message.content.filter(|value| !value.is_empty()) {
                     token_callback(delta.clone());
                     content.push_str(&delta);
@@ -200,6 +230,7 @@ async fn stream_ollama_response(
                     model: model.to_string(),
                     tokens_in,
                     tokens_out,
+                    thinking: non_empty(thinking),
                 });
             }
         }
@@ -209,6 +240,9 @@ async fn stream_ollama_response(
         let chunk = serde_json::from_str::<OllamaStreamChunk>(buffer.trim())
             .map_err(|error| AiError::InvalidResponse(error.to_string()))?;
         if let Some(message) = chunk.message {
+            if let Some(reason) = message.thinking.filter(|value| !value.is_empty()) {
+                thinking.push_str(&reason);
+            }
             if let Some(delta) = message.content.filter(|value| !value.is_empty()) {
                 token_callback(delta.clone());
                 content.push_str(&delta);
@@ -224,7 +258,17 @@ async fn stream_ollama_response(
         model: model.to_string(),
         tokens_in,
         tokens_out,
+        thinking: non_empty(thinking),
     })
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn normalize_base_url(base_url: &str) -> String {
@@ -274,6 +318,8 @@ struct OllamaChatResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaMessage {
     content: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

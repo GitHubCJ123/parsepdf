@@ -146,6 +146,9 @@ impl AiProvider for OpenRouterProvider {
     async fn stream_chat(
         &self,
         messages: Vec<AiChatMessage>,
+        // OpenRouter has no unified "thinking" toggle; reasoning models stream it
+        // inline. Accepted for trait compatibility and ignored.
+        _think: Option<bool>,
         token_callback: Box<dyn Fn(String) + Send + Sync>,
     ) -> Result<AiChatResponse, AiError> {
         let body = json!({
@@ -295,6 +298,7 @@ fn chat_response(model: &str, content: String, usage: Option<Usage>) -> AiChatRe
             .as_ref()
             .and_then(|usage| usage.completion_tokens)
             .and_then(|value| u32::try_from(value).ok()),
+        thinking: None,
     }
 }
 

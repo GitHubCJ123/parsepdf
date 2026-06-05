@@ -102,6 +102,7 @@ pub struct ChatMessageEndEvent {
     pub citations: Vec<ChatCitation>,
     pub retrieval_ms: i64,
     pub generation_ms: i64,
+    pub thinking: Option<String>,
 }
 
 #[tauri::command]
@@ -112,18 +113,26 @@ pub async fn chat_send(
     message: String,
     provider_id: String,
     doc_filter: Option<DocFilter>,
+    think: Option<bool>,
 ) -> Result<i64, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Message is empty".to_string());
     }
-    let provider_key = provider_id
-        .split(':')
+    // `provider_id` may carry a model override as "ollama:llama3.2"; split it so
+    // the provider key picks the backend and the remainder overrides the model.
+    let mut provider_parts = provider_id.splitn(2, ':');
+    let provider_key = provider_parts
         .next()
         .unwrap_or(provider_id.as_str())
         .to_string();
-    let provider = ai::configured_provider(&state.db_path, Some(&provider_key))
-        .map_err(|error| error.to_string())?;
+    let model_override = provider_parts.next().map(str::to_string);
+    let provider = ai::configured_provider_with_model(
+        &state.db_path,
+        Some(&provider_key),
+        model_override.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     let (thread_id, _user_message_id, assistant_message_id) =
         create_message_pair(&state.db_path, thread_id, &message, &provider_id)
             .map_err(|error| error.to_string())?;
@@ -149,7 +158,7 @@ pub async fn chat_send(
     let retrieval_ms = retrieval_started.elapsed().as_millis() as i64;
 
     let generation_started = Instant::now();
-    let (content, provider_label, tokens_in, tokens_out, citation_refs) = if chunks.is_empty() {
+    let (content, provider_label, tokens_in, tokens_out, citation_refs, thinking) = if chunks.is_empty() {
         let content = "I couldn't find that in your library.".to_string();
         app.emit(
             "chat:message:token",
@@ -165,6 +174,7 @@ pub async fn chat_send(
             None,
             None,
             Vec::<CitationRef>::new(),
+            None,
         )
     } else {
         let messages = build_prompt_messages(&message, &chunks);
@@ -172,6 +182,7 @@ pub async fn chat_send(
         let response = provider
             .stream_chat(
                 messages,
+                think,
                 Box::new(move |delta| {
                     let _ = token_app.emit(
                         "chat:message:token",
@@ -191,6 +202,7 @@ pub async fn chat_send(
             response.tokens_in.map(i64::from),
             response.tokens_out.map(i64::from),
             grounded.citations,
+            response.thinking,
         )
     };
     let generation_ms = generation_started.elapsed().as_millis() as i64;
@@ -221,6 +233,7 @@ pub async fn chat_send(
             citations,
             retrieval_ms,
             generation_ms,
+            thinking,
         },
     )
     .map_err(|error| error.to_string())?;
@@ -275,6 +288,20 @@ pub fn chat_get_thread(
     let thread = get_thread(&state.db_path, thread_id).map_err(|error| error.to_string())?;
     let messages = list_messages(&state.db_path, thread_id).map_err(|error| error.to_string())?;
     Ok(ChatThreadDetail { thread, messages })
+}
+
+#[tauri::command]
+pub fn chat_delete_thread(thread_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let connection = db::open_connection_at(&state.db_path).map_err(|error| error.to_string())?;
+    // chat_messages.thread_id is ON DELETE CASCADE, and open_connection_at sets
+    // PRAGMA foreign_keys=ON, so the messages are removed with the thread.
+    connection
+        .execute(
+            "DELETE FROM chat_threads WHERE id = ?1",
+            params![thread_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn build_prompt_messages(
