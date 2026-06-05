@@ -1,13 +1,13 @@
 
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { ExternalLink, FolderOpen, Info, Loader2, RefreshCw, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LogViewer } from "@/components/log-viewer";
-import { appPaths } from "@/lib/ipc";
+import { openAppDir } from "@/lib/ipc";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/toast";
 
 const credits = [
@@ -39,8 +39,7 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
 
   async function openFolder(kind: "data" | "logs") {
     try {
-      const paths = await appPaths();
-      await openPath(kind === "data" ? paths.data_dir : paths.log_dir);
+      await openAppDir(kind);
     } catch (error) {
       notifyError(`${kind === "data" ? "Data" : "Log"} folder could not be opened. ${String(error)}`);
     }

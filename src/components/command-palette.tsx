@@ -1,6 +1,5 @@
 
 import { useNavigate } from "@tanstack/react-router";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { FilePlus2, FolderOpen, Keyboard, Search, Settings } from "lucide-react";
 import {
   Command,
@@ -12,7 +11,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
-import { appPaths } from "@/lib/ipc";
+import { openAppDir } from "@/lib/ipc";
 import { notifyError } from "@/lib/toast";
 import { useUiStore } from "@/stores/ui-store";
 
@@ -40,8 +39,7 @@ export function CommandPalette() {
     }
     if (action === "data") {
       try {
-        const paths = await appPaths();
-        await openPath(paths.data_dir);
+        await openAppDir("data");
       } catch (error) {
         notifyError(`Data folder could not be opened. ${String(error)}`);
       }

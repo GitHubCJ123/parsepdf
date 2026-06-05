@@ -330,6 +330,10 @@ export function appPaths() {
   return invoke<AppPaths>("app_paths");
 }
 
+export function openAppDir(kind: "data" | "logs") {
+  return invoke<void>("open_app_dir", { kind });
+}
+
 export function logTail(level?: string, maxLines = 500) {
   return invoke<string>("log_tail", { level: level ?? null, maxLines });
 }

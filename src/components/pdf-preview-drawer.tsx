@@ -1,7 +1,6 @@
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -10,7 +9,7 @@ import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { type DocumentDetail, type SearchHit, searchDocument } from "@/lib/ipc";
+import { type DocumentDetail, libraryOpenExternal, type SearchHit, searchDocument } from "@/lib/ipc";
 import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -98,9 +97,9 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
   const renderWidth = zoom === "fit" ? Math.max(320, Math.min(containerWidth - 32, 880)) : undefined;
 
   async function openExternal() {
-    if (!document?.output_path) return;
+    if (!document) return;
     try {
-      await openPath(document.output_path);
+      await libraryOpenExternal(document.id);
     } catch (error) {
       notifyError(`PDF could not be opened. ${String(error)}`);
     }

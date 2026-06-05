@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -151,7 +150,7 @@ pub fn library_open_external(document_id: i64, state: State<'_, AppState>) -> Re
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
-    open_external(Path::new(&output_path)).map_err(|error| error.to_string())
+    super::open_in_file_manager(Path::new(&output_path)).map_err(|error| error.to_string())
 }
 
 pub fn list_documents(
@@ -300,21 +299,6 @@ fn basename(path: &str) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or(path)
         .to_string()
-}
-
-fn open_external(path: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        Command::new("explorer.exe").arg(path).spawn().map(|_| ())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open").arg(path).spawn().map(|_| ())
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        Command::new("xdg-open").arg(path).spawn().map(|_| ())
-    }
 }
 
 fn db_error_to_rusqlite(error: db::DbError) -> rusqlite::Error {

@@ -125,6 +125,7 @@ pub fn run() {
             commands::app::app_paths,
             commands::app::log_tail,
             commands::app::log_save_selection,
+            commands::app::open_app_dir,
             commands::ai::ai_apply_rename,
             commands::ai::ai_health_check,
             commands::ai::ai_list_models,

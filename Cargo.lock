@@ -4431,6 +4431,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 6.0.0",
+ "dunce",
  "fastembed",
  "futures-util",
  "image",

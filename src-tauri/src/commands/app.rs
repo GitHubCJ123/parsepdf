@@ -26,6 +26,22 @@ pub fn app_paths() -> Result<AppPaths, String> {
     })
 }
 
+/// Open one of the app's own directories in the OS file manager.
+///
+/// The webview passes a fixed `kind` ("data" | "logs") rather than a path, so
+/// the renderer can never ask the backend to open an arbitrary location.
+#[tauri::command]
+pub fn open_app_dir(kind: String) -> Result<(), String> {
+    let dir = match kind.as_str() {
+        "data" => db::app_data_dir(),
+        "logs" => db::log_dir(),
+        other => return Err(format!("unknown app directory: {other}")),
+    }
+    .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    crate::commands::open_in_file_manager(&dir).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn log_tail(level: Option<String>, max_lines: Option<usize>) -> Result<String, String> {
     let log_dir = db::log_dir().map_err(|error| error.to_string())?;

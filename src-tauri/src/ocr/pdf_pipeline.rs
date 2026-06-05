@@ -366,7 +366,11 @@ pub fn prepare_output_path(
     sha256: &str,
 ) -> Result<PathBuf, PipelineError> {
     fs::create_dir_all(output_dir)?;
-    let canonical_output_dir = output_dir.canonicalize()?;
+    // `dunce::canonicalize` resolves symlinks and `..` like `fs::canonicalize`
+    // but, on Windows, returns a normal path instead of a `\\?\` verbatim path.
+    // Verbatim paths break `explorer.exe`, the opener plugin scope check, and
+    // are confusing when shown/copied in the UI, so we never store them.
+    let canonical_output_dir = dunce::canonicalize(output_dir)?;
     let stem = input_path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -385,7 +389,7 @@ pub fn prepare_output_path(
         let parent = candidate.parent().ok_or_else(|| {
             PipelineError::UnsafeOutputPath(candidate.to_string_lossy().into_owned())
         })?;
-        let canonical_parent = parent.canonicalize()?;
+        let canonical_parent = dunce::canonicalize(parent)?;
         if !canonical_parent.starts_with(&canonical_output_dir) {
             return Err(PipelineError::UnsafeOutputPath(
                 candidate.to_string_lossy().into_owned(),
@@ -830,5 +834,21 @@ mod tests {
     fn computes_rotated_pixel_size() {
         assert_eq!(rendered_pixel_size(612.0, 792.0, 0, 200), (1700, 2200));
         assert_eq!(rendered_pixel_size(612.0, 792.0, 90, 200), (2200, 1700));
+    }
+
+    #[test]
+    fn prepare_output_path_has_no_verbatim_prefix() {
+        // Regression: output paths used to be stored with the Windows `\\?\`
+        // verbatim prefix (from `fs::canonicalize`), which broke "Open
+        // externally" and the path shown in the UI. They must now be plain.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("My Report.pdf");
+        let output = prepare_output_path(&input, dir.path(), "abc123def456").unwrap();
+        let output = output.to_string_lossy();
+        assert!(
+            !output.starts_with(r"\\?\"),
+            "output path must not be a verbatim path: {output}"
+        );
+        assert!(output.ends_with("-abc123de-searchable.pdf"), "got: {output}");
     }
 }

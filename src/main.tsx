@@ -2,13 +2,12 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { openPath } from "@tauri-apps/plugin-opener";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./styles/globals.css";
 import { ErrorBoundary } from "./components/error-boundary";
 import { getDatabase } from "./lib/db";
-import { appPaths } from "./lib/ipc";
+import { openAppDir } from "./lib/ipc";
 import { router } from "./router";
 
 document.documentElement.classList.add("dark");
@@ -65,8 +64,7 @@ function dismissSplash() {
 
 function FatalStartupError({ message }: { message: string }) {
   async function openLogFolder() {
-    const paths = await appPaths();
-    await openPath(paths.log_dir);
+    await openAppDir("logs");
   }
 
   return (
