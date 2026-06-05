@@ -366,9 +366,9 @@ function ModelPicker({ models, value, onChange }: { models: string[]; value: str
       <select
         value={value || options[0]}
         onChange={(event) => onChange(event.target.value)}
-        className="h-full appearance-none rounded-md border-0 bg-transparent py-0 pr-7 pl-0 text-xs font-medium outline-none"
+        className="h-full appearance-none rounded-md border-0 bg-transparent py-0 pr-7 pl-0 text-xs font-medium text-foreground outline-none [color-scheme:dark]"
       >
-        {options.map((model) => <option key={model} value={model}>{model}</option>)}
+        {options.map((model) => <option key={model} value={model} className="bg-popover text-popover-foreground">{model}</option>)}
       </select>
       <ChevronDown className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground" />
     </div>

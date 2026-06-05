@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import {
   ChevronLeft,
   ChevronRight,
+  FileText,
   Inbox,
   Library,
   MessageSquareText,
@@ -40,8 +41,13 @@ export function Sidebar() {
     >
       <div className="flex h-14 items-center justify-between px-3">
         {!collapsed && (
-          <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            Local library
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background/60 text-foreground shadow-sm shadow-black/20">
+              <FileText className="size-4" />
+            </span>
+            <span className="text-lg font-semibold tracking-[-0.04em] text-foreground">
+              PDF<span className="text-muted-foreground">-Parser</span>
+            </span>
           </div>
         )}
         <Button
