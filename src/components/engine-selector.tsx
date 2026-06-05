@@ -21,6 +21,7 @@ export function useOcrEngines() {
   return useQuery({
     queryKey: OCR_ENGINES_QUERY_KEY,
     queryFn: listOcrEngines,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -29,6 +30,7 @@ export function EngineSelector() {
   const { data: engines = [], isLoading, error } = useOcrEngines();
   const [progress, setProgress] = useState<ProgressState>({});
   const [busyEngine, setBusyEngine] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -49,10 +51,18 @@ export function EngineSelector() {
 
   async function install(engineId: string) {
     setBusyEngine(engineId);
+    setInstallError(null);
     try {
       await installOcrEngine(engineId);
-      await queryClient.invalidateQueries({ queryKey: OCR_ENGINES_QUERY_KEY });
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : String(error));
     } finally {
+      setProgress((current) => {
+        const next = { ...current };
+        delete next[engineId];
+        return next;
+      });
+      await queryClient.invalidateQueries({ queryKey: OCR_ENGINES_QUERY_KEY });
       setBusyEngine(null);
     }
   }
@@ -132,6 +142,22 @@ export function EngineSelector() {
             </div>
           ) : null}
         </div>
+
+        {installError ? (
+          <div
+            role="alert"
+            className="flex items-start justify-between gap-3 rounded-xl border border-destructive/35 bg-destructive/10 p-3 text-xs leading-5 text-destructive"
+          >
+            <span>Install failed: {installError}</span>
+            <button
+              type="button"
+              onClick={() => setInstallError(null)}
+              className="shrink-0 rounded-md border border-destructive/30 px-2 py-0.5 font-mono uppercase tracking-[0.18em] text-destructive/90 hover:bg-destructive/15"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         <div className="grid gap-3 lg:grid-cols-2">
           {engines.map((engine) => (

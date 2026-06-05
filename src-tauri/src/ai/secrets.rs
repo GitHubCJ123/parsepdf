@@ -52,19 +52,29 @@ impl SecretError {
     }
 }
 
+// These commands run Argon2id key derivation and Stronghold snapshot crypto,
+// which is intentionally CPU-heavy. They are `async` + `spawn_blocking` so the
+// work happens on a blocking worker thread instead of Tauri's main/UI thread
+// (a synchronous command here freezes the window while the vault unlocks).
 #[tauri::command]
-pub fn secrets_set(key: String, value: String) -> Result<(), String> {
-    set_secret(&key, &value).map_err(|error| error.public_message())
+pub async fn secrets_set(key: String, value: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || set_secret(&key, &value).map_err(|error| error.public_message()))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn secrets_get(key: String) -> Result<Option<String>, String> {
-    get_secret(&key).map_err(|error| error.public_message())
+pub async fn secrets_get(key: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || get_secret(&key).map_err(|error| error.public_message()))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn secrets_delete(key: String) -> Result<(), String> {
-    delete_secret(&key).map_err(|error| error.public_message())
+pub async fn secrets_delete(key: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || delete_secret(&key).map_err(|error| error.public_message()))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 pub fn set_secret(key: &str, value: &str) -> Result<(), SecretError> {

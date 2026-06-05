@@ -34,6 +34,12 @@ function Bootstrap() {
   const [fatalError, setFatalError] = useState<string | null>(null);
 
   useEffect(() => {
+    // The app shell has committed — fade out the static splash from index.html.
+    // Runs independently of the DB load so the UI is revealed immediately.
+    dismissSplash();
+  }, []);
+
+  useEffect(() => {
     void getDatabase().catch((error: unknown) => {
       setFatalError(error instanceof Error ? error.message : String(error));
     });
@@ -46,6 +52,15 @@ function Bootstrap() {
       <RouterProvider router={router} />
     </QueryClientProvider>
   );
+}
+
+/** Fade out and remove the no-JS splash injected by index.html. */
+function dismissSplash() {
+  const splash = document.getElementById("splash");
+  if (!splash) return;
+  splash.dataset.hide = "true";
+  // Remove after the CSS fade so it stops trapping pointer events.
+  window.setTimeout(() => splash.remove(), 300);
 }
 
 function FatalStartupError({ message }: { message: string }) {

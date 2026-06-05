@@ -110,6 +110,22 @@ impl OcrAdapter for TesseractAdapter {
 
         let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
         if code != Some(0) {
+            // Emit a concise, bounded diagnostic. The full error is >200 chars and
+            // would be elided to "<TEXT len=N>" by the log redactor, so we surface a
+            // short head plus a classifier for the most common failure (tessdata not
+            // loadable, e.g. a verbatim "\\?\" TESSDATA_PREFIX that tesseract can't open).
+            let stderr_head: String = stderr.chars().take(160).collect();
+            let tessdata_unloadable = stderr.contains("Failed loading language")
+                || stderr.contains("Could not initialize tesseract")
+                || stderr.contains("Error opening data file");
+            tracing::warn!(
+                exit_code = ?code,
+                stderr_len = stderr.len(),
+                tessdata_unloadable,
+                tessdata_prefix = %self.tessdata_prefix.join("tessdata").display(),
+                stderr_head = %stderr_head,
+                "tesseract sidecar failed"
+            );
             return Err(anyhow!("tesseract exited with code {:?}: {}", code, stderr));
         }
 
@@ -139,7 +155,63 @@ fn resolve_tesseract_resource_dir(app: &AppHandle) -> anyhow::Result<PathBuf> {
     candidates
         .into_iter()
         .find(|path| path.join("tessdata").join("eng.traineddata").exists())
+        .map(normalize_tessdata_dir)
         .ok_or_else(|| anyhow!("unable to locate bundled tessdata/eng.traineddata"))
+}
+
+/// Normalize a resolved tessdata parent directory for safe use as the tesseract
+/// sidecar's working directory and `TESSDATA_PREFIX`.
+///
+/// On Windows, `app.path().resource_dir()` (and other path APIs) can return
+/// verbatim paths prefixed with `\\?\`. The tesseract CLI builds the data-file
+/// path by appending `/eng.traineddata` (a forward slash) to `TESSDATA_PREFIX`.
+/// Verbatim `\\?\` paths reject forward slashes, so tesseract fails to open the
+/// traineddata file and reports "Could not initialize tesseract." on every page
+/// — meaning image (scanned/slideshow) pages produce no searchable text at all.
+///
+/// We strip the verbatim prefix only for the well-known disk/UNC forms, and only
+/// keep the stripped result if it still resolves the traineddata (guarding the
+/// rare long-path / unsupported-prefix cases the reviewer flagged).
+fn normalize_tessdata_dir(path: PathBuf) -> PathBuf {
+    let normalized = strip_verbatim_prefix(path.clone());
+    if normalized.as_os_str() != path.as_os_str()
+        && !normalized.join("tessdata").join("eng.traineddata").exists()
+    {
+        return path;
+    }
+    normalized
+}
+
+/// Strip the Windows verbatim (`\\?\`) prefix from known-safe path forms.
+///
+/// Handles `\\?\C:\...` (verbatim disk) and `\\?\UNC\server\share\...` (verbatim
+/// UNC). Other verbatim/device forms (e.g. `\\?\Volume{GUID}\`) are left intact,
+/// since blindly stripping them could produce an invalid path.
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    use std::path::{Component, Prefix};
+
+    let kind = match path.components().next() {
+        Some(Component::Prefix(prefix)) => prefix.kind(),
+        _ => return path,
+    };
+    let text = path.to_string_lossy();
+    match kind {
+        Prefix::VerbatimDisk(_) => text
+            .strip_prefix(r"\\?\")
+            .map(PathBuf::from)
+            .unwrap_or(path),
+        Prefix::VerbatimUNC(_, _) => text
+            .strip_prefix(r"\\?\UNC\")
+            .map(|rest| PathBuf::from(format!(r"\\{rest}")))
+            .unwrap_or(path),
+        _ => path,
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
 }
 
 fn parse_hocr(
@@ -450,6 +522,43 @@ mod tests {
         assert!(
             langs_stdout.lines().any(|line| line.trim() == "eng"),
             "{langs_stdout}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_prefix_handles_disk_unc_and_unsupported() {
+        // Verbatim disk -> plain disk path.
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(
+                r"\\?\C:\Users\jacob\Projects\PDF-Parser\src-tauri\binaries\tesseract"
+            )),
+            PathBuf::from(r"C:\Users\jacob\Projects\PDF-Parser\src-tauri\binaries\tesseract")
+        );
+
+        // Verbatim UNC -> plain UNC path.
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\app\binaries\tesseract")),
+            PathBuf::from(r"\\server\share\app\binaries\tesseract")
+        );
+
+        // Already-normal disk path is left untouched.
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"C:\already\normal")),
+            PathBuf::from(r"C:\already\normal")
+        );
+
+        // Already-normal UNC path is left untouched.
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(r"\\server\share\app")),
+            PathBuf::from(r"\\server\share\app")
+        );
+
+        // Unsupported verbatim/device forms are left intact rather than corrupted.
+        let volume = r"\\?\Volume{12345678-1234-1234-1234-1234567890ab}\tessdata";
+        assert_eq!(
+            strip_verbatim_prefix(PathBuf::from(volume)),
+            PathBuf::from(volume)
         );
     }
 

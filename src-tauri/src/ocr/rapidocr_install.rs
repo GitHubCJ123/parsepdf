@@ -28,6 +28,8 @@ pub enum InstallError {
     NonHttpsUrl(String),
     #[error("RapidOCR model file is missing: {path:?}")]
     MissingFile { path: PathBuf },
+    #[error("RapidOCR model download was rejected: {relative_path} returned HTTP {status}")]
+    DownloadRejected { relative_path: String, status: u16 },
     #[error("RapidOCR model file has unexpected size: {path:?} expected {expected} bytes, got {actual} bytes")]
     SizeMismatch {
         path: PathBuf,
@@ -77,7 +79,17 @@ pub async fn install_rapidocr(
     fs::create_dir_all(target_dir)?;
     validate_manifest(manifest)?;
 
+    tracing::info!(
+        target: "pdf_parser_lib::ocr::rapidocr_install",
+        version = manifest.version,
+        file_count = manifest.files.len(),
+        "installing RapidOCR models"
+    );
+
     let client = reqwest::Client::builder()
+        // The modelscope CDN returns 403 for requests without a User-Agent, so
+        // we must send one or every download fails before a byte is written.
+        .user_agent(concat!("PDF-Parser/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(60))
         .read_timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -109,26 +121,27 @@ pub async fn install_rapidocr(
 
     for file in manifest.files {
         let final_path = manifest_file_path(target_dir, file)?;
-        if final_path.exists()
-            && verify_model_file(&final_path, file, recorded.files.get(file.relative_path)).is_ok()
-        {
-            let file_size = recorded
-                .files
-                .get(file.relative_path)
-                .map(|recorded| recorded.size)
-                .or(file.size)
-                .unwrap_or_else(|| {
-                    fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0)
+        if final_path.exists() {
+            // Keep an already-downloaded file only if it still verifies, and
+            // always record its hash+size so the written marker is complete
+            // (manifest files are unpinned, so the marker is the only source of
+            // truth the fast install check can trust later).
+            if let Ok(record) =
+                record_existing_file(&final_path, file, recorded.files.get(file.relative_path))
+            {
+                aggregate_done = aggregate_done.saturating_add(record.size);
+                total_bytes = total_bytes.max(aggregate_done);
+                recorded
+                    .files
+                    .insert(file.relative_path.to_string(), record);
+                progress(InstallProgress {
+                    phase: "verified".to_string(),
+                    bytes_done: aggregate_done,
+                    bytes_total: total_bytes,
+                    current_file: Some(file.relative_path.to_string()),
                 });
-            aggregate_done = aggregate_done.saturating_add(file_size);
-            total_bytes = total_bytes.max(aggregate_done);
-            progress(InstallProgress {
-                phase: "verified".to_string(),
-                bytes_done: aggregate_done,
-                bytes_total: total_bytes,
-                current_file: Some(file.relative_path.to_string()),
-            });
-            continue;
+                continue;
+            }
         }
 
         if let Some(parent) = final_path.parent() {
@@ -156,9 +169,23 @@ pub async fn install_rapidocr(
             .get(file.url)
             .send()
             .await
-            .map_err(InstallError::Http)?
-            .error_for_status()
             .map_err(InstallError::Http)?;
+        // Handle HTTP status failures explicitly so we never surface or log the
+        // signed CDN redirect URL (it carries a short-lived auth_key).
+        if let Err(error) = response.error_for_status_ref() {
+            let status = error.status().map(|code| code.as_u16()).unwrap_or(0);
+            let _ = fs::remove_file(&tmp_path);
+            tracing::warn!(
+                target: "pdf_parser_lib::ocr::rapidocr_install",
+                relative_path = file.relative_path,
+                status,
+                "RapidOCR model download was rejected by the server"
+            );
+            return Err(InstallError::DownloadRejected {
+                relative_path: file.relative_path.to_string(),
+                status,
+            });
+        }
         if let Some(content_length) = response.content_length() {
             total_bytes = total_bytes.max(aggregate_done.saturating_add(content_length));
         }
@@ -166,6 +193,12 @@ pub async fn install_rapidocr(
         let mut tmp_file = tokio::fs::File::create(&tmp_path).await?;
         let mut hasher = Sha256::new();
         let mut file_done = 0_u64;
+        // Throttle per-chunk progress: emitting a Tauri event for every chunk of
+        // a ~179 MB download floods IPC and triggers thousands of React renders,
+        // which makes the window appear to hang. Phase/terminal events below are
+        // never throttled, so the UI always settles on the final state.
+        let mut last_emit = std::time::Instant::now();
+        let mut last_pct = u64::MAX;
 
         while let Some(chunk) = body.next().await {
             let chunk = chunk?;
@@ -173,12 +206,19 @@ pub async fn install_rapidocr(
             hasher.update(&chunk);
             tmp_file.write_all(&chunk).await?;
             total_bytes = total_bytes.max(aggregate_done.saturating_add(file_done));
-            progress(InstallProgress {
-                phase: "downloading".to_string(),
-                bytes_done: aggregate_done.saturating_add(file_done),
-                bytes_total: total_bytes,
-                current_file: Some(file.relative_path.to_string()),
-            });
+            let bytes_done = aggregate_done.saturating_add(file_done);
+            let pct = bytes_done.saturating_mul(100) / total_bytes.max(1);
+            let now = std::time::Instant::now();
+            if pct != last_pct || now.duration_since(last_emit) >= Duration::from_millis(200) {
+                last_pct = pct;
+                last_emit = now;
+                progress(InstallProgress {
+                    phase: "downloading".to_string(),
+                    bytes_done,
+                    bytes_total: total_bytes,
+                    current_file: Some(file.relative_path.to_string()),
+                });
+            }
         }
         tmp_file.flush().await?;
         drop(tmp_file);
@@ -236,6 +276,12 @@ pub async fn install_rapidocr(
     }
 
     write_marker(target_dir, manifest, &recorded.files)?;
+    tracing::info!(
+        target: "pdf_parser_lib::ocr::rapidocr_install",
+        version = manifest.version,
+        bytes_total = total_bytes,
+        "RapidOCR models installed"
+    );
     progress(InstallProgress {
         phase: "complete".to_string(),
         bytes_done: total_bytes,
@@ -251,6 +297,53 @@ pub fn verify_install_dir(target_dir: &Path, manifest: &ModelManifest) -> Result
     for file in manifest.files {
         let path = manifest_file_path(target_dir, file)?;
         verify_model_file(&path, file, recorded.files.get(file.relative_path))?;
+    }
+    Ok(())
+}
+
+/// Fast install check for hot paths (UI status polls and job-start guards).
+/// Confirms an install looks complete *without* hashing file contents:
+/// - the `.installed.json` marker exists and its version matches the manifest,
+/// - every manifest file exists on disk,
+/// - each file's size matches its pinned size, otherwise the size recorded in
+///   the marker (required, because the manifest files are unpinned).
+///
+/// A full SHA256 verification still runs once when the models are actually
+/// loaded for OCR, so this stays an inexpensive "is it installed?" probe that
+/// can be called on every status refresh without thrashing the disk.
+pub fn quick_check_install_dir(
+    target_dir: &Path,
+    manifest: &ModelManifest,
+) -> Result<(), InstallError> {
+    validate_manifest(manifest)?;
+    let marker_path = target_dir.join(".installed.json");
+    let marker = read_marker(target_dir).ok_or_else(|| InstallError::MissingFile {
+        path: marker_path.clone(),
+    })?;
+    // A marker for a different version means the install is stale/incomplete.
+    if marker.version != manifest.version {
+        return Err(InstallError::MissingFile { path: marker_path });
+    }
+    for file in manifest.files {
+        let path = manifest_file_path(target_dir, file)?;
+        if !path.exists() {
+            return Err(InstallError::MissingFile { path });
+        }
+        let expected_size = file
+            .size
+            .or_else(|| marker.files.get(file.relative_path).map(|record| record.size));
+        let Some(expected) = expected_size else {
+            // No pinned or recorded size for this file => incomplete marker.
+            return Err(InstallError::MissingFile { path });
+        };
+        let actual = fs::metadata(&path)?.len();
+        if actual != expected {
+            return Err(InstallError::SizeMismatch {
+                path,
+                expected,
+                actual,
+            });
+        }
     }
     Ok(())
 }
@@ -333,6 +426,27 @@ fn verify_model_file(
         }
     }
     Ok(())
+}
+
+/// Verify an already-present file and return the marker entry to persist for it.
+/// Reuses a pinned or previously recorded hash when available; otherwise hashes
+/// the file once (trust-on-first-use) so the written marker always carries a
+/// hash+size for every kept file.
+fn record_existing_file(
+    path: &Path,
+    file: &ModelFile,
+    recorded: Option<&RecordedFile>,
+) -> Result<RecordedFile, InstallError> {
+    verify_model_file(path, file, recorded)?;
+    let size = fs::metadata(path)?.len();
+    let sha256 = match file.sha256 {
+        Some(hash) => hash.to_string(),
+        None => match recorded {
+            Some(record) => record.sha256.clone(),
+            None => sha256_file(path)?,
+        },
+    };
+    Ok(RecordedFile { sha256, size })
 }
 
 fn safe_relative_path(relative_path: &str) -> Result<PathBuf, InstallError> {
@@ -467,6 +581,112 @@ mod tests {
 
     fn hex(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn unpinned_manifest(rel: &'static str, version: &'static str) -> ModelManifest {
+        let files = Box::leak(
+            vec![ModelFile {
+                url: "https://example.com/model.onnx",
+                relative_path: rel,
+                sha256: None,
+                size: None,
+            }]
+            .into_boxed_slice(),
+        );
+        ModelManifest {
+            version,
+            total_size_mb: 1,
+            files,
+        }
+    }
+
+    fn write_marker_with(dir: &Path, version: &str, rel: &str, sha256: String, size: u64) {
+        let mut files = std::collections::BTreeMap::new();
+        files.insert(rel.to_string(), RecordedFile { sha256, size });
+        let marker = InstalledMarker {
+            version: version.to_string(),
+            completed_at_unix: 0,
+            files,
+        };
+        fs::write(
+            dir.join(".installed.json"),
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn quick_check_accepts_complete_install() {
+        let dir = test_dir("quick-complete");
+        let rel = "det/model.onnx";
+        let bytes = b"a-real-enough-model";
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, bytes).unwrap();
+        write_marker_with(&dir, "v1", rel, hex(bytes), bytes.len() as u64);
+
+        let manifest = unpinned_manifest(rel, "v1");
+        quick_check_install_dir(&dir, &manifest).unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quick_check_reports_missing_without_marker() {
+        let dir = test_dir("quick-no-marker");
+        let rel = "det/model.onnx";
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"present-but-unmarked").unwrap();
+
+        let manifest = unpinned_manifest(rel, "v1");
+        let error = quick_check_install_dir(&dir, &manifest).unwrap_err();
+        assert!(matches!(error, InstallError::MissingFile { .. }));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quick_check_reports_missing_on_version_mismatch() {
+        let dir = test_dir("quick-version");
+        let rel = "det/model.onnx";
+        let bytes = b"model-bytes";
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, bytes).unwrap();
+        write_marker_with(&dir, "old-version", rel, hex(bytes), bytes.len() as u64);
+
+        let manifest = unpinned_manifest(rel, "new-version");
+        let error = quick_check_install_dir(&dir, &manifest).unwrap_err();
+        assert!(matches!(error, InstallError::MissingFile { .. }));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quick_check_reports_missing_when_file_absent() {
+        let dir = test_dir("quick-absent-file");
+        let rel = "det/model.onnx";
+        write_marker_with(&dir, "v1", rel, hex(b"whatever"), 8);
+
+        let manifest = unpinned_manifest(rel, "v1");
+        let error = quick_check_install_dir(&dir, &manifest).unwrap_err();
+        assert!(matches!(error, InstallError::MissingFile { .. }));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quick_check_reports_error_on_size_mismatch() {
+        let dir = test_dir("quick-size");
+        let rel = "det/model.onnx";
+        let bytes = b"short";
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, bytes).unwrap();
+        // Marker claims a different size than what is on disk.
+        write_marker_with(&dir, "v1", rel, hex(bytes), 9999);
+
+        let manifest = unpinned_manifest(rel, "v1");
+        let error = quick_check_install_dir(&dir, &manifest).unwrap_err();
+        assert!(matches!(error, InstallError::SizeMismatch { .. }));
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn test_dir(name: &str) -> PathBuf {

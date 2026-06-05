@@ -9,7 +9,8 @@ use crate::{
     db,
     ocr::{
         rapidocr_install::{
-            default_rapidocr_dir, install_rapidocr, verify_install_dir, InstallProgress,
+            default_rapidocr_dir, install_rapidocr, quick_check_install_dir, verify_install_dir,
+            InstallError, InstallProgress,
         },
         rapidocr_manifest::RAPIDOCR_V1,
     },
@@ -45,8 +46,11 @@ struct EngineInstallProgressEvent {
 #[tauri::command]
 pub async fn ocr_list_engines(state: State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
     let default_engine = read_default_engine(&state.db_path).map_err(|error| error.to_string())?;
-    let installing = installing_engines().lock().await;
-    let rapidocr_status = rapidocr_status(installing.contains(RAPIDOCR_ENGINE_ID));
+    let is_installing = {
+        let installing = installing_engines().lock().await;
+        installing.contains(RAPIDOCR_ENGINE_ID)
+    };
+    let rapidocr_status = rapidocr_status(is_installing);
 
     Ok(vec![
         EngineInfo {
@@ -88,6 +92,12 @@ pub async fn ocr_install_engine(app: AppHandle, engine_id: String) -> Result<(),
     }
 
     let target_dir = default_rapidocr_dir().map_err(|error| error.to_string())?;
+    tracing::info!(
+        target: "pdf_parser_lib::commands::engines",
+        engine_id = %engine_id,
+        target = %target_dir.display(),
+        "starting OCR engine install"
+    );
     let app_for_progress = app.clone();
     let progress_engine_id = engine_id.clone();
     let result = install_rapidocr(&target_dir, &RAPIDOCR_V1, move |progress| {
@@ -96,6 +106,20 @@ pub async fn ocr_install_engine(app: AppHandle, engine_id: String) -> Result<(),
     .await;
 
     installing_engines().lock().await.remove(&engine_id);
+    if let Err(error) = &result {
+        tracing::warn!(
+            target: "pdf_parser_lib::commands::engines",
+            engine_id = %engine_id,
+            error = %error,
+            "OCR engine install failed"
+        );
+    } else {
+        tracing::info!(
+            target: "pdf_parser_lib::commands::engines",
+            engine_id = %engine_id,
+            "OCR engine install complete"
+        );
+    }
     result.map_err(|error| error.to_string())
 }
 
@@ -126,7 +150,10 @@ pub async fn ocr_set_default(state: State<'_, AppState>, engine_id: String) -> R
         TESSERACT_ENGINE_ID => write_default_engine(&state.db_path, TESSERACT_ENGINE_ID),
         RAPIDOCR_ENGINE_ID => {
             let target_dir = default_rapidocr_dir().map_err(|error| error.to_string())?;
-            verify_install_dir(&target_dir, &RAPIDOCR_V1).map_err(|error| error.to_string())?;
+            tokio::task::spawn_blocking(move || verify_install_dir(&target_dir, &RAPIDOCR_V1))
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
             write_default_engine(&state.db_path, RAPIDOCR_ENGINE_ID)
         }
         _ => return Err(format!("unknown OCR engine: {engine_id}")),
@@ -180,9 +207,17 @@ fn rapidocr_status(is_installing: bool) -> EngineRuntimeStatus {
         };
     }
 
-    match verify_install_dir(&target_dir, &RAPIDOCR_V1) {
+    // Fast existence/size probe — never full-hash on a UI status poll. A merely
+    // missing or not-yet-finished install is reported as "available" (offer a
+    // clean Install button) rather than a scary "error"; only genuine
+    // corruption (wrong size) surfaces as an error the user must resolve.
+    match quick_check_install_dir(&target_dir, &RAPIDOCR_V1) {
         Ok(()) => EngineRuntimeStatus {
             status: "installed".to_string(),
+            error: None,
+        },
+        Err(InstallError::MissingFile { .. }) => EngineRuntimeStatus {
+            status: "available".to_string(),
             error: None,
         },
         Err(error) => EngineRuntimeStatus {

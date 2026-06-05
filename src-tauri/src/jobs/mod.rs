@@ -522,14 +522,18 @@ async fn build_ocr_adapter(
 
 #[cfg(feature = "rapidocr")]
 async fn build_rapidocr_adapter() -> Result<Arc<dyn OcrAdapter>, JobError> {
-    use crate::ocr::{rapidocr::RapidOcrAdapter, rapidocr_install::default_rapidocr_dir};
+    use crate::ocr::{
+        rapidocr::RapidOcrAdapter,
+        rapidocr_install::{default_rapidocr_dir, quick_check_install_dir},
+        rapidocr_manifest::RAPIDOCR_V1,
+    };
 
     let models_dir = default_rapidocr_dir().map_err(|error| JobError::Other(error.to_string()))?;
-    let adapter = RapidOcrAdapter::new(models_dir);
-    adapter
-        .verify_install()
-        .await
+    // Cheap pre-flight so a job fails fast with a clear message when models are
+    // missing; the authoritative SHA256 verify runs once when the session loads.
+    quick_check_install_dir(&models_dir, &RAPIDOCR_V1)
         .map_err(|error| JobError::Other(error.to_string()))?;
+    let adapter = RapidOcrAdapter::new(models_dir);
     Ok(Arc::new(adapter) as Arc<dyn OcrAdapter>)
 }
 

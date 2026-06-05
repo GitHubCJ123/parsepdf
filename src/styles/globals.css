@@ -105,3 +105,28 @@
       linear-gradient(135deg, oklch(1 0 0 / 4%) 0 1px, transparent 1px 12px);
   }
 }
+
+/* Search-match highlights are injected as <mark> elements into the pdf.js
+   (react-pdf) text layer, which sits invisibly over the rendered page. The
+   default UA <mark> style paints an opaque box with black text, which exposes
+   the text layer's transparent glyphs as a misaligned black duplicate over the
+   page (the "messy" overlay). Keep the glyphs transparent so only the real
+   rendered text shows through, and paint a soft, rounded translucent highlight
+   that stays legible over both light and dark page regions. */
+.react-pdf__Page__textContent mark {
+  color: transparent;
+  background-color: color-mix(in srgb, oklch(0.85 0.16 90) 42%, transparent);
+  border-radius: 0.2em;
+  box-shadow: 0 0 0 1px color-mix(in srgb, oklch(0.82 0.17 78) 36%, transparent);
+  /* Negative margin cancels the padding so neighbouring glyphs never shift,
+     while the padding gives the highlight a little breathing room around the
+     text (mirrors the pdf.js `.highlight` margin/padding technique). */
+  margin: 0 -0.08em;
+  padding: 0.05em 0.08em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.react-pdf__Page__textContent mark::selection {
+  background: transparent;
+}

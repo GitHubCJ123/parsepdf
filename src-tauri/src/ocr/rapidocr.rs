@@ -147,7 +147,14 @@ mod adapter {
         }
 
         pub async fn verify_install(&self) -> Result<(), InstallError> {
-            verify_install_dir(&self.models_dir, &RAPIDOCR_V1)
+            // Full-file SHA256 verification of the ~179 MB model set must not run
+            // on the async runtime thread, or it stalls the app during OCR.
+            let models_dir = self.models_dir.clone();
+            tokio::task::spawn_blocking(move || verify_install_dir(&models_dir, &RAPIDOCR_V1))
+                .await
+                .map_err(|error| {
+                    InstallError::Io(std::io::Error::other(error.to_string()))
+                })?
         }
 
         async fn session(&self) -> anyhow::Result<&Mutex<RapidOcrSession>> {
@@ -183,7 +190,9 @@ mod adapter {
             if cancel.is_cancelled() {
                 return Err(anyhow!("OCR cancelled"));
             }
-            self.verify_install().await?;
+            // No per-page verify: `session()` performs the authoritative SHA256
+            // check once on first init and caches the loaded models, so
+            // re-hashing ~179 MB before every page only added latency.
             let session = self.session().await?;
             let mut session = session.lock().await;
             let page = session.ocr_page(image, page_index, dpi)?;
