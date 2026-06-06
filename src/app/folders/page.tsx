@@ -1,7 +1,7 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderPlus, RefreshCw, Save, Timer, Trash2, UploadCloud } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clock3, FolderPlus, Loader2, RefreshCw, Save, Timer, Trash2, UploadCloud, XCircle } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,12 +9,18 @@ import { getSetting, setSetting } from "@/lib/db";
 import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
+  jobsList,
+  listenAppEvent,
   watcherAddFolder,
   watcherListFolders,
   watcherRemoveFolder,
   watcherScanNow,
   watcherSetEnabled,
   type FolderConfig,
+  type JobLifecycleEvent,
+  type JobProgressBatchEvent,
+  type JobStatus,
+  type JobSummary,
 } from "@/lib/ipc";
 
 // Shared with the Rust watcher, which reads this same key to schedule sweeps.
@@ -86,6 +92,8 @@ export function FoldersPage() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5">
       <FoldersHero onAdd={() => void chooseWatchedFolder()} />
+
+      <WatchedActivityPanel />
 
       <RescanIntervalControl />
 
@@ -345,6 +353,139 @@ function WatchedFoldersPanel({
       {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
     </section>
   );
+}
+
+function WatchedActivityPanel() {
+  const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const inFlight = useRef(false);
+
+  const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      const rows = await jobsList({ limit: 100 });
+      setJobs(
+        rows
+          .filter((row) => row.source === "watch")
+          .sort((a, b) => b.created_at - a.created_at || b.id - a.id),
+      );
+      setLoaded(true);
+    } finally {
+      inFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 2500);
+    return () => window.clearInterval(id);
+  }, [refresh]);
+
+  // Patch live progress without a full refetch, and refetch on lifecycle changes
+  // (queued/started/done/error) so status stays authoritative.
+  useEffect(() => {
+    let disposed = false;
+    const progress = listenAppEvent("job:progress:batch", (payload: JobProgressBatchEvent) => {
+      if (disposed) return;
+      setJobs((current) => {
+        if (current.length === 0) return current;
+        const byId = new Map(current.map((job) => [job.id, job]));
+        let changed = false;
+        for (const update of payload.updates) {
+          const existing = byId.get(update.job_id);
+          if (existing) {
+            byId.set(update.job_id, {
+              ...existing,
+              progress_pct: update.progress_pct,
+              stage: update.stage,
+              status: update.stage === "done" ? "done" : existing.status === "queued" ? "running" : existing.status,
+              page_count: update.page_count || existing.page_count,
+            });
+            changed = true;
+          }
+        }
+        return changed ? [...byId.values()] : current;
+      });
+    });
+    const lifecycle = listenAppEvent("job:lifecycle", (_payload: JobLifecycleEvent) => {
+      if (!disposed) void refresh();
+    });
+    return () => {
+      disposed = true;
+      void progress.then((unlisten) => unlisten());
+      void lifecycle.then((unlisten) => unlisten());
+    };
+  }, [refresh]);
+
+  const activeCount = jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "paused").length;
+  const recent = jobs.slice(0, 6);
+
+  return (
+    <section className="space-y-4 rounded-2xl border border-border bg-card/70 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-secondary/50 text-muted-foreground">
+            <Activity className="size-4" />
+          </span>
+          <div>
+            <h2 className="text-sm font-medium text-foreground">Processing activity</h2>
+            <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+              {activeCount > 0
+                ? `${activeCount} file${activeCount === 1 ? "" : "s"} from watched folders processing now.`
+                : "Files picked up from watched folders appear here and in the full queue as they process."}
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/upload"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          Full queue <ArrowRight className="size-3.5" />
+        </Link>
+      </div>
+
+      {recent.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border bg-background/35 px-4 py-6 text-center text-xs text-muted-foreground">
+          {loaded ? "No recent watched-folder activity yet. Drop a PDF into a watched folder, or use Scan now below." : "Loading…"}
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {recent.map((job) => (
+            <li key={job.id} className="flex items-center gap-3 rounded-lg border border-border bg-background/40 px-3 py-2">
+              <ActivityStatusIcon status={job.status} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-foreground">{job.filename}</p>
+                <p className="truncate text-xs text-muted-foreground" title={job.original_path ?? undefined}>
+                  {job.original_path ? folderName(job.original_path) : "watched folder"} · {job.stage}
+                </p>
+              </div>
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                {job.status === "running" || job.status === "queued" ? `${Math.round(clampPct(job.progress_pct))}%` : job.status}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ActivityStatusIcon({ status }: { status: JobStatus }) {
+  if (status === "done") return <CheckCircle2 className="size-4 shrink-0 text-emerald-300" />;
+  if (status === "error" || status === "cancelled") return <XCircle className="size-4 shrink-0 text-destructive" />;
+  if (status === "running") return <Loader2 className="size-4 shrink-0 animate-spin text-blue-200" />;
+  return <Clock3 className="size-4 shrink-0 text-muted-foreground" />;
+}
+
+function folderName(path: string) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : path;
+}
+
+function clampPct(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value));
 }
 
 function formatInterval(totalSeconds: number) {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, CheckCircle2, Clock3, FileText, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock3, FileText, FolderOpen, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { useOcrEngines } from "@/components/engine-selector";
 import { ErrorBanner } from "@/components/error-banner";
@@ -28,6 +28,7 @@ import {
   type DocumentRow,
   type EngineInfo,
   type JobLifecycleEvent,
+  type JobOrigin,
   type JobProgressBatchEvent,
   type JobProgressUpdate,
   type JobStatus,
@@ -43,6 +44,7 @@ type QueueJob = JobSummary & {
 };
 
 type FilterTab = "all" | "running" | "failed" | "done";
+type SourceFilter = "all" | "manual" | "watch";
 
 type DupAction = "open" | "reprocess" | "cancel";
 
@@ -86,6 +88,7 @@ export function UploadPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [filter, setFilter] = useState<FilterTab>("all");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [isDragging, setIsDragging] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [banners, setBanners] = useState<BannerState[]>([]);
@@ -198,7 +201,7 @@ export function UploadPage() {
     () => jobs.filter((job) => job.status === "done" || job.status === "error" || job.status === "cancelled").length,
     [jobs],
   );
-  const filteredJobs = useMemo(() => filterJobs(jobs, filter), [jobs, filter]);
+  const filteredJobs = useMemo(() => filterJobs(jobs, filter).filter((job) => sourceFilter === "all" || job.source === sourceFilter), [jobs, filter, sourceFilter]);
   const currentJob = useMemo(() => jobs.filter((job) => job.status === "running").sort((a, b) => (b.updated_at_ms ?? 0) - (a.updated_at_ms ?? 0))[0], [jobs]);
   const overallProgress = useMemo(() => {
     const active = jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "paused");
@@ -413,9 +416,14 @@ export function UploadPage() {
 
       <section className="overflow-hidden rounded-2xl border border-border bg-card/70">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div><h2 className="text-sm font-medium text-foreground">Job list</h2><p className="text-xs text-muted-foreground">Virtualized queue view for large batches.</p></div>
-          <div className="flex rounded-lg border border-border bg-background/45 p-1">
-            {(["all", "running", "failed", "done"] as const).map((tab) => <button key={tab} type="button" onClick={() => setFilter(tab)} className={cn("rounded-md px-3 py-1.5 text-xs capitalize text-muted-foreground", filter === tab && "bg-secondary text-foreground")}>{tab}</button>)}
+          <div><h2 className="text-sm font-medium text-foreground">Job list</h2><p className="text-xs text-muted-foreground">Manual uploads and watched-folder intake share this queue.</p></div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-lg border border-border bg-background/45 p-1">
+              {(["all", "running", "failed", "done"] as const).map((tab) => <button key={tab} type="button" onClick={() => setFilter(tab)} className={cn("rounded-md px-3 py-1.5 text-xs capitalize text-muted-foreground", filter === tab && "bg-secondary text-foreground")}>{tab}</button>)}
+            </div>
+            <div className="flex rounded-lg border border-border bg-background/45 p-1">
+              {(["all", "manual", "watch"] as const).map((src) => <button key={src} type="button" onClick={() => setSourceFilter(src)} className={cn("rounded-md px-3 py-1.5 text-xs text-muted-foreground", sourceFilter === src && "bg-secondary text-foreground")}>{src === "all" ? "All" : src === "watch" ? "Watched" : "Manual"}</button>)}
+            </div>
           </div>
         </div>
         {filteredJobs.length === 0 ? (
@@ -460,7 +468,7 @@ function UploadIssueBanner({ issue, retryFailed, openSettings }: { issue: Banner
 function JobRow({ job, onCancel, onRetry }: { job: QueueJob; onCancel: () => void; onRetry: () => void }) {
   return (
     <div tabIndex={0} className="grid min-h-[76px] grid-cols-[minmax(0,1.4fr)_0.6fr_0.7fr_0.8fr_0.6fr_1fr_auto] items-center gap-3 border-b border-border px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-      <div className="min-w-0"><p className="truncate font-medium text-foreground">{job.filename}</p><p className="text-xs text-muted-foreground">{job.source}</p></div>
+      <div className="min-w-0"><p className="truncate font-medium text-foreground">{job.filename}</p><JobSourceBadge source={job.source} path={job.original_path} /></div>
       <StatusBadge status={job.status} />
       <span className="truncate text-xs text-muted-foreground">{formatStage(job.stage)}</span>
       <div className="min-w-24"><div className="h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-foreground" style={{ width: `${clampProgress(job.progress_pct)}%` }} /></div><p className="mt-1 font-mono text-[10px] text-muted-foreground">{Math.round(clampProgress(job.progress_pct))}%</p></div>
@@ -469,6 +477,28 @@ function JobRow({ job, onCancel, onRetry }: { job: QueueJob; onCancel: () => voi
       <div className="flex gap-1">{job.status === "running" || job.status === "queued" || job.status === "paused" ? <Button type="button" size="sm" variant="ghost" onClick={onCancel}>Cancel</Button> : null}{job.status === "error" || job.status === "cancelled" ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button> : null}</div>
     </div>
   );
+}
+
+function JobSourceBadge({ source, path }: { source: JobOrigin; path?: string | null }) {
+  if (source === "watch") {
+    const folder = path ? parentFolder(path) : null;
+    return (
+      <span className="mt-0.5 inline-flex max-w-full items-center gap-1 text-xs text-muted-foreground" title={path ?? "Watched folder"}>
+        <FolderOpen className="size-3 shrink-0" />
+        <span className="truncate">Watched folder{folder ? ` · ${folder}` : ""}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <UploadCloud className="size-3 shrink-0" /> Manual upload
+    </span>
+  );
+}
+
+function parentFolder(path: string) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : null;
 }
 
 function Metric({ label, value, tone }: { label: string; value: number; tone?: "good" | "bad" }) {
