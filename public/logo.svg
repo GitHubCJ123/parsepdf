@@ -1,0 +1,54 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PDF-Parser logo">
+  <title>PDF-Parser</title>
+  <defs>
+    <linearGradient id="pp-tile" x1="256" y1="0" x2="256" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#161616"/>
+      <stop offset="1" stop-color="#080808"/>
+    </linearGradient>
+    <linearGradient id="pp-page" x1="256" y1="134" x2="256" y2="378" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fefefe"/>
+      <stop offset="1" stop-color="#e6e6e6"/>
+    </linearGradient>
+    <linearGradient id="pp-fold" x1="298" y1="134" x2="354" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d4d4d4"/>
+      <stop offset="1" stop-color="#bdbdbd"/>
+    </linearGradient>
+    <linearGradient id="pp-scan" x1="150" y1="227" x2="362" y2="227" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+    <filter id="pp-shadow" x="118" y="108" width="288" height="320" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="pp-glow" x="120" y="200" width="280" height="56" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="114" fill="url(#pp-tile)"/>
+  <rect x="1" y="1" width="510" height="510" rx="113" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1.5"/>
+
+  <g filter="url(#pp-shadow)">
+    <path d="M176 134 L298 134 L354 190 L354 360 Q354 378 336 378 L176 378 Q158 378 158 360 L158 152 Q158 134 176 134 Z" fill="url(#pp-page)"/>
+  </g>
+
+  <!-- folded corner (dog-ear) -->
+  <path d="M298 134 L354 190 L298 190 Z" fill="url(#pp-fold)"/>
+
+  <!-- text lines (raw page content) -->
+  <g fill="#111111" fill-opacity="0.85">
+    <rect x="186" y="168" width="104" height="12" rx="6"/>
+    <rect x="186" y="196" width="140" height="12" rx="6"/>
+    <rect x="186" y="278" width="138" height="12" rx="6"/>
+    <rect x="186" y="306" width="96" height="12" rx="6"/>
+  </g>
+
+  <!-- extracted line (the parsed result) -->
+  <rect x="186" y="250" width="120" height="12" rx="6" fill="url(#pp-scan)"/>
+
+  <!-- scan beam -->
+  <rect x="150" y="222" width="212" height="10" rx="5" fill="url(#pp-scan)" opacity="0.30" filter="url(#pp-glow)"/>
+  <rect x="150" y="225" width="212" height="4" rx="2" fill="url(#pp-scan)"/>
+  <circle cx="150" cy="227" r="6" fill="#38bdf8"/>
+  <circle cx="362" cy="227" r="6" fill="#3b82f6"/>
+</svg>

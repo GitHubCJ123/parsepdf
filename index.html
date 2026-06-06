@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PDF-Parser</title>
     <style>
@@ -31,6 +31,11 @@
       #splash[data-hide="true"] {
         opacity: 0;
         pointer-events: none;
+      }
+      #splash .logo {
+        width: 4.5rem;
+        height: 4.5rem;
+        border-radius: 1rem;
       }
       #splash .spinner {
         width: 1.75rem;
@@ -70,6 +75,7 @@
 
   <body>
     <div id="splash" role="status" aria-live="polite" aria-label="Loading PDF-Parser">
+      <img class="logo" src="/logo.svg" width="72" height="72" alt="" />
       <div class="spinner"></div>
       <div class="brand">PDF-Parser</div>
       <div class="sub">Starting up…</div>
