@@ -35,12 +35,6 @@ const libraryRoute = createRoute({
   component: lazyRouteComponent(() => import("@/app/library/page"), "LibraryPage"),
 });
 
-const reviewRenamesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/library/review-renames",
-  component: lazyRouteComponent(() => import("@/app/library/review-renames"), "ReviewRenamesPage"),
-});
-
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
@@ -63,7 +57,6 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   inboxRoute,
   libraryRoute,
-  reviewRenamesRoute,
   searchRoute,
   chatRoute,
   settingsRoute,

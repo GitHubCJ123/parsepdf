@@ -6,9 +6,11 @@ import { Activity, CheckCircle2, Clock3, FileText, Inbox as InboxIcon, Loader2, 
 import { EmptyState } from "@/components/empty-state";
 import { useOcrEngines } from "@/components/engine-selector";
 import { ErrorBanner } from "@/components/error-banner";
+import { DuplicateDialog } from "@/components/duplicate-dialog";
 import { QualityUpgradePrompt } from "@/components/quality-upgrade-prompt";
 import { Button } from "@/components/ui/button";
-import { notifySuccess } from "@/lib/toast";
+import { getSetting } from "@/lib/db";
+import { notifyInfo, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
   jobsCancel,
@@ -18,9 +20,12 @@ import {
   jobsPauseAll,
   jobsResumeAll,
   jobsRetry,
+  libraryCheckDuplicate,
+  libraryForceReprocess,
   listenAppEvent,
   processPdf,
   setDefaultOcrEngine,
+  type DocumentRow,
   type EngineInfo,
   type JobLifecycleEvent,
   type JobProgressBatchEvent,
@@ -38,6 +43,10 @@ type QueueJob = JobSummary & {
 };
 
 type FilterTab = "all" | "running" | "failed" | "done";
+
+type DupAction = "open" | "reprocess" | "cancel";
+
+type BatchTracker = { total: number; added: number; versioned: number; duplicates: number };
 
 type BannerState = {
   id: string;
@@ -85,6 +94,53 @@ export function InboxPage() {
   const defaultEngineId = engines.find((engine) => engine.is_default)?.id ?? "tesseract";
   const [selectedEngineId, setSelectedEngineId] = useState(defaultEngineId);
   const refreshInFlight = useRef(false);
+
+  // Duplicate Protection: the modal currently shown, a serialized queue of
+  // pending prompts (so batches show one at a time), and the resolver for the
+  // active prompt. `dupModeRef` mirrors the "On duplicate upload" setting.
+  const [pendingDup, setPendingDup] = useState<{ fileName: string; existing: DocumentRow } | null>(null);
+  const dupQueueRef = useRef<Array<{ path: string; existing: DocumentRow; resolve: (action: DupAction) => void }>>([]);
+  const dupResolveRef = useRef<((action: DupAction) => void) | null>(null);
+  const dupModeRef = useRef<"confirm" | "skip-silent">("confirm");
+
+  useEffect(() => {
+    const load = async () => {
+      const value = await getSetting("library.duplicate_handling").catch(() => null);
+      dupModeRef.current = value === "skip-silent" ? "skip-silent" : "confirm";
+    };
+    void load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
+
+  function showNextDuplicatePrompt() {
+    if (dupResolveRef.current) return;
+    const next = dupQueueRef.current.shift();
+    if (!next) return;
+    dupResolveRef.current = next.resolve;
+    setPendingDup({ fileName: basename(next.path), existing: next.existing });
+  }
+
+  function promptDuplicate(path: string, existing: DocumentRow) {
+    return new Promise<DupAction>((resolve) => {
+      dupQueueRef.current.push({ path, existing, resolve });
+      showNextDuplicatePrompt();
+    });
+  }
+
+  function resolveDuplicate(action: DupAction) {
+    const resolve = dupResolveRef.current;
+    dupResolveRef.current = null;
+    setPendingDup(null);
+    resolve?.(action);
+    window.setTimeout(showNextDuplicatePrompt, 0);
+  }
+
+  function openExistingDocument(documentId: number) {
+    // Full navigation (matches the app's other cross-page jumps); the startup
+    // splash covers the brief reload. Library reads ?doc= on mount.
+    window.location.assign(`/library?doc=${documentId}&page=1`);
+  }
 
   const refreshJobs = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -154,23 +210,69 @@ export function InboxPage() {
   const visibleEnd = Math.min(filteredJobs.length, visibleStart + Math.ceil(LIST_HEIGHT / ITEM_HEIGHT) + 8);
   const visibleJobs = filteredJobs.slice(visibleStart, visibleEnd);
 
-  const processPath = useCallback(async (path: string) => {
+  const processPath = useCallback(async (path: string, batch?: BatchTracker) => {
     if (shouldSkipDuplicate(path)) {
       console.debug("[inbox] skipped duplicate invoke for", path);
       return;
     }
     const engineId = selectedEngineId;
     try {
-      const queued = await processPdf(path, engineId);
+      // Duplicate Protection: instant content + name check before any OCR.
+      const check = await libraryCheckDuplicate(path);
+
+      if (check.kind === "content_duplicate") {
+        if (batch) batch.duplicates += 1;
+        if (dupModeRef.current === "skip-silent") {
+          if (!batch) {
+            notifyInfo("Already in your library — opening existing.");
+            openExistingDocument(check.existing.id);
+          }
+          return;
+        }
+        const action = await promptDuplicate(path, check.existing);
+        if (action === "open") {
+          openExistingDocument(check.existing.id);
+        } else if (action === "reprocess") {
+          const queued = await libraryForceReprocess(check.existing.id);
+          setJobs((current) => mergeJobRows(current, [queued]));
+          setQueueMessage("Reprocessing existing document.");
+          if (!batch) notifySuccess("Reprocessing existing document.");
+        }
+        return;
+      }
+
+      const override = check.kind === "name_collision" ? check.suggested_name : undefined;
+      const queued = await processPdf(path, engineId, override);
       setJobs((current) => mergeJobRows(current, [queued]));
       setQueueMessage("Queued for OCR.");
-      notifySuccess("Queued for OCR.");
+      if (check.kind === "name_collision") {
+        if (batch) batch.versioned += 1;
+        else notifySuccess(`Saved as ${check.suggested_name} — same name as an existing document.`);
+      } else {
+        if (batch) batch.added += 1;
+        else notifySuccess("Queued for OCR.");
+      }
     } catch (error) {
       addBanner({ id: `manual-${Date.now()}`, severity: "error", title: "PDF could not be queued", message: basename(path), details: error instanceof Error ? error.message : String(error) });
     } finally {
       clearDuplicateMark(path);
     }
   }, [selectedEngineId]);
+
+  function flushBatchSummary(batch: BatchTracker) {
+    if (batch.total <= 1) return;
+    const parts: string[] = [];
+    if (batch.added > 0) parts.push(`${batch.added} added`);
+    if (batch.versioned > 0) parts.push(`${batch.versioned} versioned`);
+    if (batch.duplicates > 0) parts.push(`${batch.duplicates} duplicate${batch.duplicates === 1 ? "" : "s"} skipped`);
+    if (parts.length > 0) notifyInfo(parts.join(" · "));
+  }
+
+  const processBatch = useCallback(async (paths: string[]) => {
+    const batch: BatchTracker = { total: paths.length, added: 0, versioned: 0, duplicates: 0 };
+    await Promise.allSettled(paths.map((path) => processPath(path, batch)));
+    flushBatchSummary(batch);
+  }, [processPath]);
 
   useEffect(() => {
     const unlistenPromise = getCurrentWebviewWindow().onDragDropEvent((event) => {
@@ -182,21 +284,23 @@ export function InboxPage() {
         const paths = payload.paths ?? [];
         console.debug("[inbox] drop event paths=", paths);
         const seen = new Set<string>();
+        const pdfPaths: string[] = [];
         for (const path of paths) {
           if (!path.toLowerCase().endsWith(".pdf")) continue;
           if (seen.has(path)) continue;
           seen.add(path);
-          void processPath(path);
+          pdfPaths.push(path);
         }
+        if (pdfPaths.length > 0) void processBatch(pdfPaths);
       }
     });
     return () => void unlistenPromise.then((unlisten) => unlisten());
-  }, [processPath]);
+  }, [processBatch]);
 
   async function choosePdf() {
     const selected = await open({ directory: false, multiple: true, filters: [{ name: "PDF", extensions: ["pdf"] }] });
     const paths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
-    await Promise.allSettled(paths.map((path) => processPath(path)));
+    await processBatch(paths);
   }
 
   async function pauseAll() {
@@ -330,6 +434,16 @@ export function InboxPage() {
           </div>
         )}
       </section>
+
+      <DuplicateDialog
+        open={pendingDup != null}
+        fileName={pendingDup?.fileName ?? ""}
+        existing={pendingDup?.existing ?? null}
+        busy={false}
+        onOpenChange={(next) => { if (!next) resolveDuplicate("cancel"); }}
+        onOpenExisting={() => resolveDuplicate("open")}
+        onReprocess={() => resolveDuplicate("reprocess")}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ pub async fn process_pdf(
     manager: State<'_, JobManager>,
     input_path: String,
     engine_id: Option<String>,
+    display_name_override: Option<String>,
 ) -> Result<JobSummary, String> {
     info!(
         input_path = %input_path,
@@ -21,6 +22,7 @@ pub async fn process_pdf(
             source_path: input_path.clone().into(),
             origin: JobOrigin::Manual,
             engine: engine_id,
+            display_name: display_name_override,
         })
         .await
         .map_err(|error| error.to_string());

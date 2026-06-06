@@ -8,7 +8,12 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
-use crate::{db, state::AppState};
+use crate::{
+    db,
+    jobs::{JobManager, JobSummary},
+    state::AppState,
+    watcher::{IngestJob, JobOrigin},
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentRow {
@@ -39,19 +44,6 @@ pub struct DocumentPagePreview {
     pub text: String,
     pub ocr_status: String,
     pub mean_confidence: Option<f32>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingRenameRow {
-    pub document_id: i64,
-    pub original_name: String,
-    pub current_name: String,
-    pub output_path: Option<String>,
-    pub proposed_name: String,
-    pub summary: Option<String>,
-    pub provider: String,
-    pub created_at: i64,
-    pub reviewed: i64,
 }
 
 #[tauri::command]
@@ -129,18 +121,6 @@ pub fn library_delete(
 }
 
 #[tauri::command]
-pub fn library_pending_renames(
-    state: State<'_, AppState>,
-) -> Result<Vec<PendingRenameRow>, String> {
-    pending_renames(&state.db_path).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn library_skip_rename(document_id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    skip_rename(&state.db_path, document_id).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 pub fn library_open_external(document_id: i64, state: State<'_, AppState>) -> Result<(), String> {
     let connection = db::open_connection_at(&state.db_path).map_err(|error| error.to_string())?;
     let output_path: String = connection
@@ -151,6 +131,177 @@ pub fn library_open_external(document_id: i64, state: State<'_, AppState>) -> Re
         )
         .map_err(|error| error.to_string())?;
     super::open_in_file_manager(Path::new(&output_path)).map_err(|error| error.to_string())
+}
+
+/// Result of the pre-ingest duplicate check (Duplicate Protection).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DuplicateCheck {
+    /// Nothing in the library matches by content or name — safe to process.
+    New,
+    /// The exact file (same SHA256) is already in the library.
+    ContentDuplicate {
+        // Boxed to keep the enum small (DocumentRow is large); serde serializes
+        // the boxed value transparently, so the JSON shape is unchanged.
+        existing: Box<DocumentRow>,
+        active_job_id: Option<i64>,
+    },
+    /// A different file already uses this name — suggest a "(vN)" variant.
+    NameCollision { suggested_name: String },
+}
+
+/// Pre-ingest check: hash the file once and classify it against the library.
+/// Powers the duplicate modal / silent-skip / auto-versioning in the inbox.
+#[tauri::command]
+pub fn library_check_duplicate(
+    input_path: String,
+    state: State<'_, AppState>,
+) -> Result<DuplicateCheck, String> {
+    let path = Path::new(&input_path);
+    let sha256 =
+        crate::ocr::pdf_pipeline::compute_sha256(path).map_err(|error| error.to_string())?;
+    let connection = db::open_connection_at(&state.db_path).map_err(|error| error.to_string())?;
+
+    // Content duplicate takes priority: same bytes already imported (not deleted).
+    let existing_id = connection
+        .query_row(
+            "SELECT id FROM documents WHERE sha256 = ?1 AND deleted_at IS NULL",
+            params![sha256],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(id) = existing_id {
+        let existing = query_document_row(&connection, id).map_err(|error| error.to_string())?;
+        let active_job_id = connection
+            .query_row(
+                "SELECT id FROM jobs
+                 WHERE document_id = ?1 AND status IN ('queued', 'running', 'paused')
+                 ORDER BY created_at DESC LIMIT 1",
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        return Ok(DuplicateCheck::ContentDuplicate {
+            existing: Box::new(existing),
+            active_job_id,
+        });
+    }
+
+    // Different content but a colliding name → suggest a versioned name.
+    let incoming = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("document.pdf");
+    if let Some(suggested) =
+        next_version_name(&connection, incoming).map_err(|error| error.to_string())?
+    {
+        return Ok(DuplicateCheck::NameCollision {
+            suggested_name: suggested,
+        });
+    }
+
+    Ok(DuplicateCheck::New)
+}
+
+/// Re-run OCR for an existing document (reuses its row). Used by the duplicate
+/// modal's "Reprocess" button, keeping the document's original OCR engine.
+#[tauri::command]
+pub async fn library_force_reprocess(
+    document_id: i64,
+    manager: State<'_, JobManager>,
+    state: State<'_, AppState>,
+) -> Result<JobSummary, String> {
+    let (original_path, engine) = {
+        let connection =
+            db::open_connection_at(&state.db_path).map_err(|error| error.to_string())?;
+        connection
+            .query_row(
+                "SELECT original_path, ocr_engine FROM documents WHERE id = ?1",
+                params![document_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .map_err(|error| error.to_string())?
+    };
+    manager
+        .enqueue_ingest(IngestJob {
+            source_path: original_path.into(),
+            origin: JobOrigin::Manual,
+            engine,
+            display_name: None,
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// If an existing (non-deleted) document already uses the incoming file's name
+/// (or a "(vN)" variant of it), return the next free "<stem> (vN).<ext>" name.
+/// Returns `None` when there is no name collision.
+fn next_version_name(
+    connection: &rusqlite::Connection,
+    incoming_filename: &str,
+) -> rusqlite::Result<Option<String>> {
+    let (incoming_stem, ext) = split_name(incoming_filename);
+    let (root_stem, _) = strip_version_suffix(&incoming_stem);
+    let target = root_stem.to_lowercase();
+
+    let mut statement = connection.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(display_name), ''), original_path)
+         FROM documents WHERE deleted_at IS NULL",
+    )?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut max_version: Option<u32> = None;
+    for name in names {
+        let display_stem = split_name(&basename(&name)).0;
+        let (root, version) = strip_version_suffix(&display_stem);
+        if root.to_lowercase() == target {
+            let observed = version.unwrap_or(1);
+            max_version = Some(max_version.map_or(observed, |current| current.max(observed)));
+        }
+    }
+
+    Ok(max_version.map(|max| {
+        let next = max + 1;
+        match ext {
+            Some(ext) => format!("{root_stem} (v{next}).{ext}"),
+            None => format!("{root_stem} (v{next})"),
+        }
+    }))
+}
+
+/// Split a filename into (stem, extension). "report.pdf" -> ("report", Some("pdf")).
+fn split_name(filename: &str) -> (String, Option<String>) {
+    let path = Path::new(filename);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(filename)
+        .to_string();
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string());
+    (stem, ext)
+}
+
+/// Strip a trailing " (vN)" from a name stem. "report (v2)" -> ("report", Some(2)).
+fn strip_version_suffix(stem: &str) -> (String, Option<u32>) {
+    let trimmed = stem.trim_end();
+    if trimmed.ends_with(')') {
+        if let Some(open) = trimmed.rfind(" (v") {
+            let inner = &trimmed[open + 3..trimmed.len() - 1];
+            if !inner.is_empty() && inner.chars().all(|ch| ch.is_ascii_digit()) {
+                if let Ok(version) = inner.parse::<u32>() {
+                    return (trimmed[..open].to_string(), Some(version));
+                }
+            }
+        }
+    }
+    (trimmed.to_string(), None)
 }
 
 pub fn list_documents(
@@ -192,66 +343,6 @@ pub fn list_documents(
             .map(|id| query_document_row(&connection, id))
             .collect()
     }
-}
-
-pub fn pending_renames(db_path: &Path) -> rusqlite::Result<Vec<PendingRenameRow>> {
-    let connection = db::open_connection_at(db_path).map_err(db_error_to_rusqlite)?;
-    let mut statement = connection.prepare(
-        "SELECT p.document_id,
-                d.original_path,
-                COALESCE(d.display_name, ''),
-                d.output_path,
-                p.proposed_name,
-                p.summary,
-                p.provider,
-                p.created_at,
-                p.reviewed
-         FROM pending_renames p
-         JOIN documents d ON d.id = p.document_id
-         WHERE p.reviewed = 0 AND d.deleted_at IS NULL
-         ORDER BY p.created_at DESC",
-    )?;
-    let rows = statement
-        .query_map([], |row| {
-            let original_path: String = row.get(1)?;
-            Ok(PendingRenameRow {
-                document_id: row.get(0)?,
-                original_name: basename(&original_path),
-                current_name: row.get(2)?,
-                output_path: row.get(3)?,
-                proposed_name: row.get(4)?,
-                summary: row.get(5)?,
-                provider: row.get(6)?,
-                created_at: row.get(7)?,
-                reviewed: row.get(8)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-pub fn skip_rename(db_path: &Path, document_id: i64) -> rusqlite::Result<()> {
-    let connection = db::open_connection_at(db_path).map_err(db_error_to_rusqlite)?;
-    let original_path: String = connection.query_row(
-        "SELECT original_path FROM documents WHERE id = ?1",
-        params![document_id],
-        |row| row.get(0),
-    )?;
-    let original_name = basename(&original_path);
-    connection.execute(
-        "UPDATE pending_renames SET reviewed = 2 WHERE document_id = ?1",
-        params![document_id],
-    )?;
-    connection.execute(
-        "UPDATE documents
-         SET status = 'done',
-             display_name = COALESCE(display_name, ?2),
-             ai_provider = COALESCE(ai_provider, 'none'),
-             updated_at = ?3
-         WHERE id = ?1",
-        params![document_id, original_name, now_ts()],
-    )?;
-    Ok(())
 }
 
 fn query_document_row(
@@ -310,4 +401,85 @@ fn now_ts() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_version_name, split_name, strip_version_suffix};
+    use rusqlite::Connection;
+
+    fn seed(names: &[(&str, Option<i64>)]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE documents(
+                id INTEGER PRIMARY KEY,
+                display_name TEXT,
+                original_path TEXT NOT NULL,
+                deleted_at INTEGER
+            );",
+        )
+        .unwrap();
+        for (index, (name, deleted)) in names.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO documents(id, display_name, original_path, deleted_at) VALUES(?1, ?2, ?3, ?4)",
+                rusqlite::params![index as i64 + 1, name, format!("C:/in/{name}"), deleted],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn strip_version_suffix_parses_v_numbers() {
+        assert_eq!(strip_version_suffix("report"), ("report".to_string(), None));
+        assert_eq!(strip_version_suffix("report (v2)"), ("report".to_string(), Some(2)));
+        assert_eq!(strip_version_suffix("report (v10)"), ("report".to_string(), Some(10)));
+        // Not a version suffix — left intact.
+        assert_eq!(strip_version_suffix("report (draft)"), ("report (draft)".to_string(), None));
+    }
+
+    #[test]
+    fn split_name_separates_stem_and_ext() {
+        assert_eq!(split_name("report.pdf"), ("report".to_string(), Some("pdf".to_string())));
+        assert_eq!(split_name("report"), ("report".to_string(), None));
+    }
+
+    #[test]
+    fn next_version_name_none_when_no_collision() {
+        let conn = seed(&[("invoice.pdf", None)]);
+        assert_eq!(next_version_name(&conn, "report.pdf").unwrap(), None);
+    }
+
+    #[test]
+    fn next_version_name_suggests_v2_on_first_collision() {
+        let conn = seed(&[("report.pdf", None)]);
+        assert_eq!(
+            next_version_name(&conn, "report.pdf").unwrap(),
+            Some("report (v2).pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn next_version_name_picks_next_after_highest_existing() {
+        let conn = seed(&[("report.pdf", None), ("report (v2).pdf", None)]);
+        assert_eq!(
+            next_version_name(&conn, "report.pdf").unwrap(),
+            Some("report (v3).pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn next_version_name_ignores_deleted_documents() {
+        let conn = seed(&[("report.pdf", Some(123))]);
+        assert_eq!(next_version_name(&conn, "report.pdf").unwrap(), None);
+    }
+
+    #[test]
+    fn next_version_name_is_case_insensitive() {
+        let conn = seed(&[("Report.pdf", None)]);
+        assert_eq!(
+            next_version_name(&conn, "report.pdf").unwrap(),
+            Some("report (v2).pdf".to_string())
+        );
+    }
 }

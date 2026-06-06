@@ -202,8 +202,13 @@ impl JobManager {
             engine = job.engine.as_deref().unwrap_or("(default)"),
             "enqueue_ingest called"
         );
-        let (document_id, job_id) =
-            create_queued_job(&self.db_path, &canonical, job.origin, job.engine.as_deref())?;
+        let (document_id, job_id) = create_queued_job(
+            &self.db_path,
+            &canonical,
+            job.origin,
+            job.engine.as_deref(),
+            job.display_name.as_deref(),
+        )?;
         info!(
             document_id,
             job_id,
@@ -554,6 +559,7 @@ fn create_queued_job(
     input_path: &Path,
     origin: JobOrigin,
     engine: Option<&str>,
+    display_name: Option<&str>,
 ) -> Result<(i64, i64), JobError> {
     let sha256 = pdf_pipeline::compute_sha256(input_path)?;
     info!(
@@ -642,9 +648,9 @@ fn create_queued_job(
         (document_id, output_path)
     } else {
         transaction.execute(
-            "INSERT INTO documents(sha256, original_path, page_count, status, ingested_at, updated_at)
-             VALUES(?1, ?2, 0, 'queued', ?3, ?3)",
-            params![sha256, original_path, now],
+            "INSERT INTO documents(sha256, original_path, display_name, page_count, status, ingested_at, updated_at)
+             VALUES(?1, ?2, ?3, 0, 'queued', ?4, ?4)",
+            params![sha256, original_path, display_name, now],
         )?;
         let id = transaction.last_insert_rowid();
         info!(document_id = id, "NEW: inserted new document row");
@@ -1093,7 +1099,7 @@ mod tests {
         assert!(stale_output.exists());
 
         let (_doc_id, _job_id) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
 
         // The stale output file must be gone, and the document row must have been reused (not duplicated).
         assert!(
@@ -1116,7 +1122,7 @@ mod tests {
         let input_path = input_path.canonicalize().unwrap();
 
         let (doc_id, job_id) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         assert!(doc_id > 0);
         assert!(job_id > 0);
     }
@@ -1157,10 +1163,10 @@ mod tests {
         let input_path = input_path.canonicalize().unwrap();
 
         let (doc1, job1) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         // Second call before the first job has finished must return the same job_id.
         let (doc2, job2) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         assert_eq!(doc1, doc2);
         assert_eq!(job1, job2, "duplicate ingest must reuse the active job");
 
@@ -1183,7 +1189,7 @@ mod tests {
         let input_path = input_path.canonicalize().unwrap();
 
         let (doc1, job1) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
 
         // Mark the first job as done.
         let conn = crate::db::open_connection_at(&db_path).unwrap();
@@ -1195,7 +1201,7 @@ mod tests {
         drop(conn);
 
         let (doc2, job2) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         assert_eq!(doc1, doc2, "same document reused");
         assert_ne!(job1, job2, "new job created for legitimate reprocess");
     }
@@ -1209,7 +1215,7 @@ mod tests {
 
         // First run completes.
         let (doc, job1) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         let conn = crate::db::open_connection_at(&db_path).unwrap();
         conn.execute(
             "UPDATE jobs SET status = 'done', finished_at = ?2 WHERE id = ?1",
@@ -1220,7 +1226,7 @@ mod tests {
 
         // Reprocess: this inserts a second jobs row for the same document.
         let (doc_again, job2) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, None, None).unwrap();
         assert_eq!(doc, doc_again);
         assert_ne!(job1, job2);
 
@@ -1243,7 +1249,7 @@ mod tests {
         let input_path = input_path.canonicalize().unwrap();
 
         let (doc, ingest_job) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, Some("tesseract")).unwrap();
+            create_queued_job(&db_path, &input_path, JobOrigin::Manual, Some("tesseract"), None).unwrap();
         // Simulate the RAG indexing pipeline inserting an 'embed' job after OCR.
         let conn = crate::db::open_connection_at(&db_path).unwrap();
         conn.execute(

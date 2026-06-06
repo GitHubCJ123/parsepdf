@@ -16,7 +16,7 @@ use tokio::task;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{commands::ai as ai_commands, db, events::JobProgressUpdate, rag, state::AppState};
+use crate::{db, events::JobProgressUpdate, rag, state::AppState};
 
 use super::{
     composer::{compose_searchable_pdf, PageOcrLayer},
@@ -303,10 +303,7 @@ pub async fn process_pdf(
     }
     replace_page_records(&state.db_path, document_id, &processed_pages)?;
 
-    let queue_ai_naming = ai_commands::should_queue_naming(&state.db_path);
-    let final_status = if queue_ai_naming {
-        "naming"
-    } else if any_ocr_failed {
+    let final_status = if any_ocr_failed {
         "partial_success"
     } else {
         "done"
@@ -320,12 +317,7 @@ pub async fn process_pdf(
         Some(&output_path),
         None,
     )?;
-    set_document_ai_naming_enabled(&state.db_path, document_id, queue_ai_naming)?;
-    if queue_ai_naming {
-        ai_commands::queue_document_naming(app.clone(), state.clone(), document_id);
-    } else {
-        set_default_document_name(&state.db_path, document_id, &filename)?;
-    }
+    set_default_document_name(&state.db_path, document_id, &filename)?;
     emit_progress(
         &state,
         &filename,
@@ -333,11 +325,7 @@ pub async fn process_pdf(
         document_id,
         final_status,
         100.0,
-        if queue_ai_naming {
-            "OCR complete; AI naming review queued"
-        } else {
-            "Processing complete"
-        },
+        "Processing complete",
         None,
         page_count,
     );
@@ -479,22 +467,6 @@ pub fn resolve_output_dir(db_path: &Path) -> Result<PathBuf, PipelineError> {
         params![canonical.to_string_lossy().as_ref()],
     )?;
     Ok(canonical)
-}
-
-fn set_document_ai_naming_enabled(
-    db_path: &Path,
-    document_id: i64,
-    enabled: bool,
-) -> Result<(), PipelineError> {
-    let connection = db::open_connection_at(db_path)?;
-    connection.execute(
-        "UPDATE documents
-         SET ai_naming_enabled = ?2,
-             updated_at = ?3
-         WHERE id = ?1",
-        params![document_id, if enabled { 1 } else { 0 }, now_ts()],
-    )?;
-    Ok(())
 }
 
 fn set_default_document_name(

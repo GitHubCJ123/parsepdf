@@ -1,20 +1,18 @@
 
 import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { Library as LibraryIcon, Loader2, Search, Sparkles } from "lucide-react";
+import { Library as LibraryIcon, Loader2, Search } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { PdfPreviewDrawer } from "@/components/pdf-preview-drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { libraryDelete, libraryGet, libraryList, libraryPendingRenames, type DocumentDetail, type DocumentRow, type PendingRenameRow } from "@/lib/ipc";
+import { libraryDelete, libraryGet, libraryList, type DocumentDetail, type DocumentRow } from "@/lib/ipc";
 import { getSetting } from "@/lib/db";
 import { cn } from "@/lib/utils";
 
 export function LibraryPage() {
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
-  const [pendingRenames, setPendingRenames] = useState<PendingRenameRow[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -27,9 +25,8 @@ export function LibraryPage() {
     setLoading(true);
     try {
       const limit = parseLoadLimit(await getSetting("library.page_size"));
-      const [rows, pending] = await Promise.all([libraryList(undefined, limit, 0), libraryPendingRenames()]);
+      const rows = await libraryList(undefined, limit, 0);
       setDocuments(rows);
-      setPendingRenames(pending);
     } finally {
       setLoading(false);
     }
@@ -112,13 +109,6 @@ export function LibraryPage() {
           </div>
         </div>
       </header>
-
-      {pendingRenames.length > 0 ? (
-        <Link to="/library/review-renames" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 transition-colors hover:bg-amber-400/15">
-          <span className="flex items-center gap-3"><Sparkles className="size-8 text-amber-100/80" /><span><strong>{pendingRenames.length} files awaiting review</strong><span className="ml-2 text-amber-100/75">Confirm AI-suggested names before they're applied.</span></span></span>
-          <span className="rounded-md border border-amber-200/25 px-3 py-1 font-medium">Review</span>
-        </Link>
-      ) : null}
 
       <section className="overflow-hidden rounded-xl border border-border bg-card/65">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">

@@ -123,20 +123,6 @@ export type FolderConfig = {
   last_error?: string | null;
 };
 
-export type DocumentNamingReadyEvent = {
-  type: "document:naming_ready";
-  document_id: number;
-  proposed_name: string;
-};
-
-export type NamingProposal = {
-  display_name: string;
-  summary: string;
-  provider: string;
-  model: string;
-  tokens_used?: number | null;
-};
-
 export type DocumentRow = {
   id: number;
   display_name: string;
@@ -163,18 +149,6 @@ export type DocumentPagePreview = {
 export type DocumentDetail = {
   document: DocumentRow;
   pages: DocumentPagePreview[];
-};
-
-export type PendingRenameRow = {
-  document_id: number;
-  original_name: string;
-  current_name: string;
-  output_path: string | null;
-  proposed_name: string;
-  summary?: string | null;
-  provider: string;
-  created_at: number;
-  reviewed: number;
 };
 
 export type SearchSort = "relevance" | "newestFirst" | "oldestFirst";
@@ -308,7 +282,6 @@ export type AppEvent =
   | JobLifecycleEvent
   | JobFailedEvent
   | DocumentUpdatedEvent
-  | DocumentNamingReadyEvent
   | WatcherErrorEvent;
 
 export type DatabaseInfo = {
@@ -343,10 +316,10 @@ export function logSaveSelection(path: string, text: string) {
   return invoke<void>("log_save_selection", { path, text });
 }
 
-export function processPdf(inputPath: string, engineId?: string) {
+export function processPdf(inputPath: string, engineId?: string, displayNameOverride?: string) {
   console.info("[ipc] processPdf invoke", { inputPath, engineId });
   const startedAt = Date.now();
-  return invoke<JobSummary>("process_pdf", { inputPath, engineId }).then(
+  return invoke<JobSummary>("process_pdf", { inputPath, engineId, displayNameOverride: displayNameOverride ?? null }).then(
     (summary) => {
       console.info("[ipc] processPdf resolved", {
         inputPath,
@@ -445,14 +418,6 @@ export function aiListModels(provider: string) {
   return invoke<string[]>("ai_list_models", { provider });
 }
 
-export function aiProposeNames(documentIds: number[]) {
-  return invoke<NamingProposal[]>("ai_propose_names", { documentIds });
-}
-
-export function aiApplyRename(documentId: number, newName: string) {
-  return invoke<void>("ai_apply_rename", { documentId, newName });
-}
-
 export function secretsSet(key: string, value: string) {
   return invoke<void>("secrets_set", { key, value });
 }
@@ -477,16 +442,21 @@ export function libraryDelete(documentId: number, force = false) {
   return invoke<void>("library_delete", { documentId, force });
 }
 
-export function libraryPendingRenames() {
-  return invoke<PendingRenameRow[]>("library_pending_renames");
-}
-
-export function librarySkipRename(documentId: number) {
-  return invoke<void>("library_skip_rename", { documentId });
-}
-
 export function libraryOpenExternal(documentId: number) {
   return invoke<void>("library_open_external", { documentId });
+}
+
+export type DuplicateCheck =
+  | { kind: "new" }
+  | { kind: "content_duplicate"; existing: DocumentRow; active_job_id: number | null }
+  | { kind: "name_collision"; suggested_name: string };
+
+export function libraryCheckDuplicate(inputPath: string) {
+  return invoke<DuplicateCheck>("library_check_duplicate", { inputPath });
+}
+
+export function libraryForceReprocess(documentId: number) {
+  return invoke<JobSummary>("library_force_reprocess", { documentId });
 }
 
 export function searchDocuments(query: SearchQuery) {

@@ -21,7 +21,6 @@ export function SettingsPage() {
   const [activeSection, setActiveSection] = useState("ocr");
   const [outputDir, setOutputDir] = useState("");
   const [provider, setProvider] = useState<Provider>("none");
-  const [aiNamingEnabled, setAiNamingEnabled] = useState(false);
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(DEFAULT_OLLAMA_URL);
   const [ollamaModel, setOllamaModel] = useState("llama3.1");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -35,10 +34,9 @@ export function SettingsPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [storedOutput, storedProvider, namingEnabled, ooModel, ollamaUrl] = await Promise.all([
+      const [storedOutput, storedProvider, ooModel, ollamaUrl] = await Promise.all([
         getSetting("output_dir"),
         getSetting("ai.default_provider"),
-        getSetting("ai.naming_enabled"),
         getSetting("ollama.model"),
         secretsGet("ollama.base_url").catch(() => null),
       ]);
@@ -46,12 +44,11 @@ export function SettingsPage() {
       setOutputDir(storedOutput ?? "%USERPROFILE%\\Documents\\PDF-Parser\\Processed");
       const validProvider = isProvider(storedProvider) ? storedProvider : "none";
       setProvider(validProvider);
-      // Migrate away from the now-removed OpenRouter provider so AI naming
-      // falls back to a supported backend instead of a dead cloud config.
+      // Migrate away from the now-removed OpenRouter provider so chat falls back
+      // to a supported backend instead of a dead cloud config.
       if (storedProvider != null && storedProvider !== validProvider) {
         await setSetting("ai.default_provider", validProvider);
       }
-      setAiNamingEnabled(namingEnabled === "1" || namingEnabled === "true");
       setOllamaModel(ooModel ?? "llama3.1");
       setOllamaBaseUrl(ollamaUrl ?? DEFAULT_OLLAMA_URL);
     }
@@ -64,11 +61,6 @@ export function SettingsPage() {
   async function persistProvider(nextProvider: Provider) {
     setProvider(nextProvider);
     await setSetting("ai.default_provider", nextProvider);
-  }
-
-  async function persistNamingEnabled(enabled: boolean) {
-    setAiNamingEnabled(enabled);
-    await setSetting("ai.naming_enabled", enabled ? "1" : "0");
   }
 
   async function chooseOutputDir() {
@@ -244,15 +236,6 @@ export function SettingsPage() {
           </div>
         </header>
 
-        <section className="rounded-xl border border-border bg-card/70 p-4">
-          <h2 className="text-sm font-medium text-foreground">Get started</h2>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-muted-foreground">
-            <li>Choose an output folder (currently default).</li>
-            <li>Optional: configure an AI provider.</li>
-            <li>Optional: add a watched folder.</li>
-          </ol>
-        </section>
-
         {activeSection === "ocr" && (
           <SettingsCard title="OCR" eyebrow="Local text layer">
             <div className="grid gap-4 md:grid-cols-2">
@@ -294,19 +277,15 @@ export function SettingsPage() {
         {activeSection === "ai" && (
           <SettingsCard title="AI providers" eyebrow="Review before rename">
             <div className="rounded-lg border border-border bg-background/45 p-4 text-sm leading-6 text-muted-foreground">
-              Ollama runs entirely on your machine — free, offline, and private. Point PDF-Parser at your local Ollama server and choose a model to enable AI naming.
+              Ollama runs entirely on your machine — free, offline, and private. Point PDF-Parser at your local Ollama server and choose a model to use Chat over your library.
             </div>
-            <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">
+            <div className="grid gap-4">
               <label className="space-y-2">
                 <span className="text-sm font-medium">Default provider</span>
-                <select className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm" value={provider} onChange={(event) => void persistProvider(event.target.value as Provider)}>
+                <select className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm" value={provider} onChange={(event) => void persistProvider(event.target.value as Provider)}>
                   <option value="none">None</option>
                   <option value="ollama">Ollama</option>
                 </select>
-              </label>
-              <label className="flex items-center gap-2 rounded-lg border border-border bg-background/45 px-3 py-2 text-sm">
-                <input type="checkbox" checked={aiNamingEnabled} onChange={(event) => void persistNamingEnabled(event.target.checked)} />
-                Review AI names after OCR
               </label>
             </div>
 
@@ -383,19 +362,22 @@ export function SettingsPage() {
 function LibrarySettings() {
   const [confirmDelete, setConfirmDelete] = useState(true);
   const [pageSize, setPageSize] = useState("300");
+  const [duplicateHandling, setDuplicateHandling] = useState("confirm");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [confirmValue, sizeValue] = await Promise.all([
+      const [confirmValue, sizeValue, dupValue] = await Promise.all([
         getSetting("library.confirm_delete"),
         getSetting("library.page_size"),
+        getSetting("library.duplicate_handling"),
       ]);
       if (cancelled) return;
       // Confirmation defaults ON so a brand-new install can't delete without asking.
       setConfirmDelete(confirmValue == null ? true : confirmValue === "1");
       setPageSize(sizeValue ?? "300");
+      setDuplicateHandling(dupValue === "skip-silent" ? "skip-silent" : "confirm");
       setLoaded(true);
     }
     void load();
@@ -416,10 +398,16 @@ function LibrarySettings() {
     notifySuccess("Library settings saved.");
   }
 
+  async function persistDuplicateHandling(value: string) {
+    setDuplicateHandling(value);
+    await setSetting("library.duplicate_handling", value);
+    notifySuccess("Library settings saved.");
+  }
+
   return (
     <SettingsCard title="Library defaults" eyebrow="Archive behaviour">
       <p className="text-sm leading-6 text-muted-foreground">
-        Control how the Library deletes documents and how many it loads at once. Preview, open, and copy-path actions live in the Library panel itself.
+        Control how the Library handles duplicates, deletes documents, and how many it loads at once. Preview, open, and copy-path actions live in the Library panel itself.
       </p>
 
       <div className="space-y-3">
@@ -431,6 +419,22 @@ function LibrarySettings() {
           </span>
         </label>
       </div>
+
+      <label className="space-y-2">
+        <span className="text-sm font-medium">On duplicate upload</span>
+        <select
+          className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm"
+          value={duplicateHandling}
+          disabled={!loaded}
+          onChange={(event) => void persistDuplicateHandling(event.target.value)}
+        >
+          <option value="confirm">Ask me (recommended)</option>
+          <option value="skip-silent">Skip silently</option>
+        </select>
+        <p className="text-xs text-muted-foreground">
+          When you upload a file that's already in your library, "Ask me" shows a dialog (open existing or reprocess); "Skip silently" just opens the existing document. A different file with the same name is always saved as a new version.
+        </p>
+      </label>
 
       <label className="space-y-2">
         <span className="text-sm font-medium">Documents to load</span>

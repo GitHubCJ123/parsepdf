@@ -59,6 +59,9 @@ pub struct IngestJob {
     pub source_path: PathBuf,
     pub origin: JobOrigin,
     pub engine: Option<String>,
+    /// Optional display name to assign on first ingest (e.g. a "(v2)" name from
+    /// duplicate protection). `None` falls back to the source filename.
+    pub display_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -438,6 +441,7 @@ async fn queue_candidate(path: PathBuf, origin: JobOrigin, context: WatcherConte
             source_path: candidate,
             origin,
             engine: None,
+            display_name: None,
         })
         .await
         .is_ok()
