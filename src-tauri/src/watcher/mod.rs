@@ -21,6 +21,11 @@ use crate::{db, ocr::pdf_pipeline};
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(2);
 const STABILITY_WINDOW: Duration = Duration::from_secs(1);
 const DEDUP_WINDOW: Duration = Duration::from_secs(60 * 60);
+/// How often the watcher rescans every enabled folder while the app is open, to
+/// catch files that arrived without a filesystem event (network shares, sleep,
+/// copies that the OS coalesced, etc.). Already-ingested files are skipped, so a
+/// steady-state scan is cheap and never reprocesses anything.
+const PERIODIC_RESCAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderConfig {
@@ -73,6 +78,11 @@ pub struct WatcherService {
     app_handle: AppHandle,
     dedup: Arc<Mutex<DedupCache>>,
     stability_failures: Arc<Mutex<HashMap<PathBuf, u32>>>,
+    db_path: Arc<PathBuf>,
+    /// Files we have already examined this session, keyed by path with the size
+    /// and modified time we saw. Lets periodic rescans skip unchanged files
+    /// without re-hashing them.
+    scan_seen: Arc<Mutex<HashMap<PathBuf, FileSnapshot>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +113,8 @@ impl WatcherService {
         let excluded_paths = Arc::new(RwLock::new(resolve_excluded_paths(db_path)?));
         let dedup = Arc::new(Mutex::new(DedupCache::default()));
         let stability_failures = Arc::new(Mutex::new(HashMap::new()));
+        let db_path = Arc::new(db_path.to_path_buf());
+        let scan_seen = Arc::new(Mutex::new(HashMap::new()));
 
         let context = WatcherContext {
             excluded_paths: excluded_paths.clone(),
@@ -110,6 +122,8 @@ impl WatcherService {
             app_handle: app_handle.clone(),
             dedup: dedup.clone(),
             stability_failures: stability_failures.clone(),
+            db_path: db_path.clone(),
+            scan_seen: scan_seen.clone(),
         };
 
         let debouncer = new_debouncer(
@@ -137,6 +151,8 @@ impl WatcherService {
             app_handle,
             dedup,
             stability_failures,
+            db_path,
+            scan_seen,
         })
     }
 
@@ -309,6 +325,48 @@ impl WatcherService {
         Ok(queued)
     }
 
+    /// Spawn a background task that rescans every enabled folder on a fixed
+    /// interval while the app is running. Files already in the library are
+    /// skipped by `queue_candidate`, so steady-state scans only pick up
+    /// genuinely new PDFs and never reprocess existing ones.
+    pub fn spawn_periodic_rescan(&self) {
+        let service = self.clone();
+        let db_path = (*service.db_path).clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                sleep(PERIODIC_RESCAN_INTERVAL).await;
+                let enabled: Vec<PathBuf> = {
+                    let folders = service
+                        .folders
+                        .read()
+                        .expect("watcher folders lock poisoned");
+                    folders
+                        .values()
+                        .filter(|folder| folder.enabled)
+                        .map(|folder| folder.path.clone())
+                        .collect()
+                };
+                let mut queued = 0_u32;
+                for path in enabled {
+                    match service
+                        .scan_now(&db_path, path.to_string_lossy().into_owned())
+                        .await
+                    {
+                        Ok(count) => queued += count,
+                        Err(error) => warn!(
+                            error = %error,
+                            folder = %path.display(),
+                            "periodic rescan failed for folder"
+                        ),
+                    }
+                }
+                if queued > 0 {
+                    info!(queued, "periodic rescan queued new documents");
+                }
+            }
+        });
+    }
+
     fn watch_path(&self, path: &Path, recursive: bool) -> Result<(), WatcherError> {
         let mode = if recursive {
             RecursiveMode::Recursive
@@ -352,6 +410,8 @@ impl WatcherService {
             app_handle: self.app_handle.clone(),
             dedup: self.dedup.clone(),
             stability_failures: self.stability_failures.clone(),
+            db_path: self.db_path.clone(),
+            scan_seen: self.scan_seen.clone(),
         }
     }
 
@@ -370,6 +430,8 @@ struct WatcherContext {
     app_handle: AppHandle,
     dedup: Arc<Mutex<DedupCache>>,
     stability_failures: Arc<Mutex<HashMap<PathBuf, u32>>>,
+    db_path: Arc<PathBuf>,
+    scan_seen: Arc<Mutex<HashMap<PathBuf, FileSnapshot>>>,
 }
 
 fn handle_debounced_events(events: Vec<DebouncedEvent>, context: WatcherContext) {
@@ -392,6 +454,21 @@ async fn queue_candidate(path: PathBuf, origin: JobOrigin, context: WatcherConte
         .clone();
     if is_under_excluded_path(&candidate, &excluded) || !is_candidate_pdf(&candidate) {
         return false;
+    }
+
+    // Fast-path: if we have already examined this exact file (same size and
+    // modified time) skip it without re-hashing. Keeps periodic rescans cheap
+    // and stops the watcher from re-reading unchanged files every scan.
+    if let Ok(current) = snapshot(&candidate) {
+        if context
+            .scan_seen
+            .lock()
+            .expect("scan_seen lock poisoned")
+            .get(&candidate)
+            == Some(&current)
+        {
+            return false;
+        }
     }
 
     match wait_until_stable(&candidate, STABILITY_WINDOW).await {
@@ -426,6 +503,16 @@ async fn queue_candidate(path: PathBuf, origin: JobOrigin, context: WatcherConte
             return false;
         }
     };
+
+    // Persistent dedup: if this exact content is already recorded in the library
+    // (in any state, including soft-deleted) never re-ingest it. This is what
+    // stops the watcher from reprocessing the same files on every scan or after
+    // a restart, when the in-memory caches start out empty.
+    if document_exists_for_sha(&context.db_path, &sha) {
+        remember_scan_seen(&context, &candidate);
+        return false;
+    }
+
     if !context
         .dedup
         .lock()
@@ -435,16 +522,20 @@ async fn queue_candidate(path: PathBuf, origin: JobOrigin, context: WatcherConte
         return false;
     }
 
-    context
+    let queued = context
         .job_tx
         .send(IngestJob {
-            source_path: candidate,
+            source_path: candidate.clone(),
             origin,
             engine: None,
             display_name: None,
         })
         .await
-        .is_ok()
+        .is_ok();
+    if queued {
+        remember_scan_seen(&context, &candidate);
+    }
+    queued
 }
 
 fn record_stability_failure(context: &WatcherContext, path: &Path) -> u32 {
@@ -455,6 +546,42 @@ fn record_stability_failure(context: &WatcherContext, path: &Path) -> u32 {
     let count = failures.entry(path.to_path_buf()).or_insert(0);
     *count += 1;
     *count
+}
+
+/// Record the current size/modified-time of a file so future scans can skip it
+/// without re-hashing. Called after a file has been queued or recognised as an
+/// already-ingested duplicate.
+fn remember_scan_seen(context: &WatcherContext, path: &Path) {
+    if let Ok(current) = snapshot(path) {
+        context
+            .scan_seen
+            .lock()
+            .expect("scan_seen lock poisoned")
+            .insert(path.to_path_buf(), current);
+    }
+}
+
+/// Returns true if a document with this content hash already exists in the
+/// library (in any state, including soft-deleted). On a database error we return
+/// false so a genuinely new file is not silently dropped; `create_queued_job`
+/// performs the authoritative check before processing.
+fn document_exists_for_sha(db_path: &Path, sha: &str) -> bool {
+    let connection = match db::open_connection_at(db_path) {
+        Ok(connection) => connection,
+        Err(error) => {
+            warn!(error = %error, "failed to open database for watcher dedup check");
+            return false;
+        }
+    };
+    connection
+        .query_row(
+            "SELECT 1 FROM documents WHERE sha256 = ?1 LIMIT 1",
+            params![sha],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .unwrap_or(false)
 }
 
 fn is_candidate_pdf(path: &Path) -> bool {

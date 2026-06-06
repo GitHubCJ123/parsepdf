@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, FolderOpen, FolderPlus, Info, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, Copy, FolderOpen, FolderPlus, Info, Layers, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { EngineSelector } from "@/components/engine-selector";
@@ -410,48 +410,97 @@ function LibrarySettings() {
         Control how the Library handles duplicates, deletes documents, and how many it loads at once. Preview, open, and copy-path actions live in the Library panel itself.
       </p>
 
-      <div className="space-y-3">
-        <label className="flex items-start gap-3 rounded-lg border border-border bg-background/45 px-3 py-3 text-sm">
-          <input type="checkbox" className="mt-0.5" checked={confirmDelete} disabled={!loaded} onChange={(event) => void persistConfirmDelete(event.target.checked)} />
-          <span>
-            <span className="font-medium text-foreground">Confirm before deleting</span>
-            <span className="mt-0.5 block text-xs text-muted-foreground">Ask for confirmation before a document is removed. Deleting always removes the processed PDF from disk.</span>
-          </span>
-        </label>
+      <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-background/40">
+        <SettingRow
+          icon={Trash2}
+          title="Confirm before deleting"
+          description="Ask for confirmation before a document is removed. Deleting always removes the processed PDF from disk."
+        >
+          <Toggle checked={confirmDelete} disabled={!loaded} onChange={(value) => void persistConfirmDelete(value)} label="Confirm before deleting" />
+        </SettingRow>
+
+        <SettingRow
+          icon={Copy}
+          title="On duplicate upload"
+          description={'"Ask me" shows a dialog (open existing or reprocess); "Skip silently" just opens the existing document. A different file with the same name is always saved as a new version.'}
+        >
+          <SettingSelect value={duplicateHandling} disabled={!loaded} onChange={(value) => void persistDuplicateHandling(value)}>
+            <option value="confirm">Ask me</option>
+            <option value="skip-silent">Skip silently</option>
+          </SettingSelect>
+        </SettingRow>
+
+        <SettingRow
+          icon={Layers}
+          title="Documents to load"
+          description="How many of the most recent documents to fetch when opening the Library."
+        >
+          <SettingSelect value={pageSize} disabled={!loaded} onChange={(value) => void persistPageSize(value)}>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="300">300</option>
+            <option value="500">500</option>
+          </SettingSelect>
+        </SettingRow>
       </div>
-
-      <label className="space-y-2">
-        <span className="text-sm font-medium">On duplicate upload</span>
-        <select
-          className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm"
-          value={duplicateHandling}
-          disabled={!loaded}
-          onChange={(event) => void persistDuplicateHandling(event.target.value)}
-        >
-          <option value="confirm">Ask me (recommended)</option>
-          <option value="skip-silent">Skip silently</option>
-        </select>
-        <p className="text-xs text-muted-foreground">
-          When you upload a file that's already in your library, "Ask me" shows a dialog (open existing or reprocess); "Skip silently" just opens the existing document. A different file with the same name is always saved as a new version.
-        </p>
-      </label>
-
-      <label className="space-y-2">
-        <span className="text-sm font-medium">Documents to load</span>
-        <select
-          className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm"
-          value={pageSize}
-          disabled={!loaded}
-          onChange={(event) => void persistPageSize(event.target.value)}
-        >
-          <option value="100">100</option>
-          <option value="200">200</option>
-          <option value="300">300</option>
-          <option value="500">500</option>
-        </select>
-        <p className="text-xs text-muted-foreground">How many of the most recent documents to fetch when opening the Library.</p>
-      </label>
     </SettingsCard>
+  );
+}
+
+function SettingRow({ icon: Icon, title, description, children }: { icon: typeof Trash2; title: string; description: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-secondary/50 text-muted-foreground">
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-foreground">{title}</div>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      <div className="shrink-0 self-start sm:self-center sm:pl-4">{children}</div>
+    </div>
+  );
+}
+
+function SettingSelect({ value, disabled, onChange, children }: { value: string; disabled?: boolean; onChange: (value: string) => void; children: ReactNode }) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-44 appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 [color-scheme:dark]"
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  );
+}
+
+function Toggle({ checked, disabled, onChange, label }: { checked: boolean; disabled?: boolean; onChange: (value: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+        checked ? "border-primary bg-primary" : "border-input bg-secondary",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block size-4 rounded-full bg-background shadow-sm transition-transform",
+          checked ? "translate-x-[1.375rem]" : "translate-x-1",
+        )}
+      />
+    </button>
   );
 }
 

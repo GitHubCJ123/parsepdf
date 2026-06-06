@@ -114,6 +114,7 @@ pub fn run() {
                 if let Err(error) = startup_watcher.startup(&startup_db_path).await {
                     tracing::warn!(error = %error, "watcher startup failed");
                 }
+                startup_watcher.spawn_periodic_rescan();
             });
 
             app.manage(app_state);
