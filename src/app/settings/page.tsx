@@ -1,12 +1,11 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, ChevronDown, Copy, FolderOpen, FolderPlus, Info, Layers, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, Copy, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
-import { EmptyState } from "@/components/empty-state";
 import { EngineSelector } from "@/components/engine-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { aiHealthCheck, aiListModels, debugDumpState, debugResetLibrary, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, watcherAddFolder, watcherListFolders, watcherRemoveFolder, watcherScanNow, watcherSetEnabled, type DebugStateDump, type EngineInfo, type FolderConfig } from "@/lib/ipc";
+import { aiHealthCheck, aiListModels, debugDumpState, debugResetLibrary, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, type DebugStateDump, type EngineInfo } from "@/lib/ipc";
 import { getSetting, setSetting } from "@/lib/db";
 import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -27,8 +26,6 @@ export function SettingsPage() {
   const [ollamaStatus, setOllamaStatus] = useState<Status>("idle");
   const [ollamaMessage, setOllamaMessage] = useState("");
   const [settingsMessage, setSettingsMessage] = useState("");
-  const [folders, setFolders] = useState<FolderConfig[]>([]);
-  const [foldersMessage, setFoldersMessage] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
@@ -71,48 +68,6 @@ export function SettingsPage() {
       setSettingsMessage("Output folder saved.");
       notifySuccess("Output folder saved.");
     }
-  }
-
-  async function refreshFolders() {
-    try {
-      setFolders(await watcherListFolders());
-    } catch (error) {
-      setFoldersMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function chooseWatchedFolder() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected === "string") {
-      const folder = await watcherAddFolder(selected, true);
-      setFolders((current) => [folder, ...current.filter((item) => item.path !== folder.path)]);
-      setFoldersMessage("Watched folder added.");
-      notifySuccess("Watched folder added.");
-      await refreshFolders();
-    }
-  }
-
-  async function toggleWatchedFolder(folder: FolderConfig, enabled: boolean) {
-    await watcherSetEnabled(folder.path, enabled);
-    await refreshFolders();
-  }
-
-  async function setFolderRecursive(folder: FolderConfig, recursive: boolean) {
-    await watcherAddFolder(folder.path, recursive);
-    await refreshFolders();
-  }
-
-  async function scanWatchedFolder(folder: FolderConfig) {
-    const queued = await watcherScanNow(folder.path);
-    setFoldersMessage(`${queued} new file${queued === 1 ? "" : "s"} queued.`);
-    await refreshFolders();
-  }
-
-  async function removeWatchedFolder(folder: FolderConfig) {
-    await watcherRemoveFolder(folder.path);
-    setFolders((current) => current.filter((item) => item.path !== folder.path));
-    setFoldersMessage("Watched folder removed.");
-    notifySuccess("Watched folder removed.");
   }
 
   async function saveOllama() {
@@ -178,7 +133,6 @@ export function SettingsPage() {
     () => [
       ["ocr", "OCR"],
       ["ai", "AI providers"],
-      ["folders", "Folders"],
       ["library", "Library"],
       ["updates", "Updates"],
       ["about", "About"],
@@ -186,12 +140,6 @@ export function SettingsPage() {
     ] as const,
     [],
   );
-
-  useEffect(() => {
-    if (activeSection === "folders") {
-      void refreshFolders();
-    }
-  }, [activeSection]);
 
   useEffect(() => {
     const setSection = (event: Event) => {
@@ -240,7 +188,18 @@ export function SettingsPage() {
           <SettingsCard title="OCR" eyebrow="Local text layer">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2">
-                <span className="text-sm font-medium">OCR engine</span>
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  OCR engine
+                  <span
+                    tabIndex={0}
+                    role="note"
+                    aria-label="Tesseract is the bundled, fast default and is best for clean Latin-script text. RapidOCR (PP-OCRv5) is an opt-in download with higher accuracy on low-quality scans and strong CJK support."
+                    title="Tesseract: fast, bundled, best for clean Latin-script text. RapidOCR (PP-OCRv5): opt-in download, higher accuracy on low-quality scans and CJK."
+                    className="inline-flex cursor-help items-center rounded text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Info className="size-3.5" />
+                  </span>
+                </span>
                 <select
                   className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm"
                   disabled={enginesLoading}
@@ -256,7 +215,7 @@ export function SettingsPage() {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-muted-foreground">Install RapidOCR here when higher-accuracy OCR is needed.</p>
+                <p className="text-xs text-muted-foreground">Tesseract is fast and bundled; install RapidOCR for higher accuracy on tough or non-Latin scans. See the comparison below.</p>
               </label>
               <label className="space-y-2">
                 <span className="text-sm font-medium">Output folder</span>
@@ -327,18 +286,6 @@ export function SettingsPage() {
           </SettingsCard>
         )}
 
-        {activeSection === "folders" && (
-          <FoldersSection
-            folders={folders}
-            message={foldersMessage}
-            onAdd={() => void chooseWatchedFolder()}
-            onRefresh={() => void refreshFolders()}
-            onToggle={(folder, enabled) => void toggleWatchedFolder(folder, enabled)}
-            onRecursiveChange={(folder, recursive) => void setFolderRecursive(folder, recursive)}
-            onScan={(folder) => void scanWatchedFolder(folder)}
-            onRemove={(folder) => void removeWatchedFolder(folder)}
-          />
-        )}
         {activeSection === "library" && <LibrarySettings />}
         {activeSection === "updates" && <Stub title="Updates" text="The updater checks signed GitHub release artifacts and prepares installs on quit." />}
         {activeSection === "about" && (
@@ -589,7 +536,7 @@ function DiagnosticsCard() {
             {dump.jobs.length === 0 && dump.documents.length === 0 ? <p className="text-muted-foreground">No documents or jobs yet.</p> : null}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">Click "Dump current state" to inspect the DB rows behind the inbox queue. Use "Reset library" to wipe everything (documents, jobs, pages, chunks, embeddings) and start clean.</p>
+          <p className="text-sm text-muted-foreground">Click "Dump current state" to inspect the DB rows behind the upload queue. Use "Reset library" to wipe everything (documents, jobs, pages, chunks, embeddings) and start clean.</p>
         )}
       </div>
     </SettingsCard>
@@ -641,72 +588,6 @@ function StatusBadge({ status }: { status: Status }) {
       {status === "connected" ? <CheckCircle2 className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
       {label}
     </span>
-  );
-}
-
-function FoldersSection({
-  folders,
-  message,
-  onAdd,
-  onRefresh,
-  onToggle,
-  onRecursiveChange,
-  onScan,
-  onRemove,
-}: {
-  folders: FolderConfig[];
-  message: string;
-  onAdd: () => void;
-  onRefresh: () => void;
-  onToggle: (folder: FolderConfig, enabled: boolean) => void;
-  onRecursiveChange: (folder: FolderConfig, recursive: boolean) => void;
-  onScan: (folder: FolderConfig) => void;
-  onRemove: (folder: FolderConfig) => void;
-}) {
-  return (
-    <SettingsCard title="Watched folders" eyebrow="Automatic intake">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background/45 p-4">
-        <div>
-          <h3 className="font-medium text-foreground">Watched folders</h3>
-          <p className="mt-1 text-sm text-muted-foreground">New PDFs in enabled folders are debounced, checked for write stability, and queued automatically.</p>
-        </div>
-        <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={onRefresh}><RefreshCw className="size-4" />Refresh</Button>
-          <Button type="button" onClick={onAdd}><FolderPlus className="size-4" />Add folder</Button>
-        </div>
-      </div>
-
-      {folders.length === 0 ? (
-        <EmptyState icon={FolderPlus} title="No watched folders" description="Watch a folder to auto-process new PDFs." actionLabel="Add folder" onAction={onAdd} className="min-h-64 rounded-lg border border-dashed border-border bg-background/35" />
-      ) : (
-        <div className="space-y-3">
-          {folders.map((folder) => {
-            const errored = Boolean(folder.last_error);
-            return (
-              <div key={folder.path} className="grid gap-3 rounded-xl border border-border bg-background/40 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
-                <div className="min-w-0 space-y-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span title={folder.last_error ?? (folder.enabled ? "Active" : "Disabled")} className={cn("size-2.5 shrink-0 rounded-full", errored ? "bg-destructive" : folder.enabled ? "bg-emerald-400" : "bg-muted-foreground")} />
-                    <p className="truncate font-medium text-foreground">{folder.path}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span>{folder.file_count} PDF{folder.file_count === 1 ? "" : "s"}</span>
-                    <label className="inline-flex items-center gap-2"><input type="checkbox" checked={folder.enabled} onChange={(event) => onToggle(folder, event.target.checked)} />Enabled</label>
-                    <label className="inline-flex items-center gap-2"><input type="checkbox" checked={folder.recursive} onChange={(event) => onRecursiveChange(folder, event.target.checked)} />Recursive</label>
-                    {folder.last_error ? <span className="text-destructive">{folder.last_error}</span> : null}
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 lg:justify-end">
-                  <Button type="button" variant="outline" onClick={() => onScan(folder)}><RefreshCw className="size-4" />Scan now</Button>
-                  <Button type="button" variant="destructive" onClick={() => onRemove(folder)}><Trash2 className="size-4" />Remove</Button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
-    </SettingsCard>
   );
 }
 

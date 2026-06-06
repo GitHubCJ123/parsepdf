@@ -11,8 +11,12 @@ permissions:
 
 jobs:
   check:
-    runs-on: windows-latest
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,7 +25,7 @@ jobs:
         with: { version: 9 }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: src-tauri }
+        with: { workspaces: src-tauri, key: '${{ matrix.platform }}' }
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: cargo fmt --check

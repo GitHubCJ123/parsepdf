@@ -233,8 +233,13 @@ pub fn configured_provider_with_model(
             )))
         }
         "ollama" => {
+            // The Ollama base URL lives in the local secrets vault. On platforms
+            // where that vault is unavailable (e.g. macOS, where the
+            // DPAPI-backed machine secret isn't implemented yet) fall back to the
+            // default localhost endpoint instead of failing the whole request.
             let base_url = secrets::get_secret("ollama.base_url")
-                .map_err(|error| AiError::Unavailable(error.to_string()))?
+                .ok()
+                .flatten()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
             let model = model_override.or_else(|| {

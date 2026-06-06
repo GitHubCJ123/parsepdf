@@ -3,11 +3,12 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  Inbox,
+  FolderOpen,
   Library,
   MessageSquareText,
   Search,
   Settings,
+  UploadCloud,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,13 +16,14 @@ import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
 
 type SidebarItem = {
-  to: "/inbox" | "/library" | "/search" | "/chat" | "/settings";
+  to: "/folders" | "/upload" | "/library" | "/search" | "/chat" | "/settings";
   label: string;
   icon: LucideIcon;
 };
 
 const sidebarItems: SidebarItem[] = [
-  { to: "/inbox", label: "Inbox", icon: Inbox },
+  { to: "/folders", label: "Folders", icon: FolderOpen },
+  { to: "/upload", label: "Upload", icon: UploadCloud },
   { to: "/library", label: "Library", icon: Library },
   { to: "/search", label: "Search", icon: Search },
   { to: "/chat", label: "Chat", icon: MessageSquareText },

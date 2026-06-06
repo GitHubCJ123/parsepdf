@@ -152,9 +152,7 @@ mod adapter {
             let models_dir = self.models_dir.clone();
             tokio::task::spawn_blocking(move || verify_install_dir(&models_dir, &RAPIDOCR_V1))
                 .await
-                .map_err(|error| {
-                    InstallError::Io(std::io::Error::other(error.to_string()))
-                })?
+                .map_err(|error| InstallError::Io(std::io::Error::other(error.to_string())))?
         }
 
         async fn session(&self) -> anyhow::Result<&Mutex<RapidOcrSession>> {

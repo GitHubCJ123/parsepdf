@@ -6,23 +6,25 @@ A Windows desktop app for turning PDFs into a searchable, AI-named local library
 
 ## Features
 
+- **Folder watcher (primary workflow)** — drop PDFs into a watched folder and they are detected, OCR'd, named, and added to your library automatically, with stable-write detection, a configurable rescan interval, queue progress, retries, and cancellation
+- Manual **Upload** page for one-off files: drag-and-drop or pick PDFs on demand
 - OCR pipeline with Tesseract 5, pdfium-render, and lopdf searchable-PDF output
-- Optional AI naming through OpenRouter or local Ollama, with secure key storage
-- Library, Inbox, Search, Chat, and Settings panels in a Tauri 2 desktop shell
+- RapidOCR PP-OCRv5 opt-in model download (SHA256 verified) for higher-accuracy and CJK scans
+- Optional AI naming and chat through a local Ollama server — offline, no API key required
+- Folders, Upload, Library, Search, Chat, and Settings panels in a Tauri 2 desktop shell
 - FTS5 full-text search with highlighted snippets and saved searches
-- Folder watcher with stable-write detection, queue progress, retries, and cancellation
 - Document-aware RAG chat with local embeddings and grounded citations
-- RapidOCR PP-OCRv5 opt-in model download with SHA256 verification
 - GitHub Actions release pipeline with MSI, NSIS, and Tauri updater artifacts
 
 ## Quick start
 
 1. Download the latest MSI from the GitHub Releases page.
 2. Install and launch PDF-Parser.
-3. Drag PDFs into Inbox, or choose **Choose files**.
-4. Optional: open Settings to configure OpenRouter, Ollama, or watched folders.
+3. On the **Folders** page, add a watched folder — every new PDF dropped there is processed automatically. This is the primary way to use PDF-Parser.
+4. Handling a single file? Use the **Upload** page to drag in or pick PDFs manually.
+5. Optional: open Settings to pick your OCR engine or point PDF-Parser at a local Ollama server for AI naming and chat.
 
-PDF-Parser works offline by default. Cloud AI is only used after you configure it.
+PDF-Parser works offline by default. Optional AI naming and chat run against a local Ollama server you configure in Settings.
 
 ## Building from source
 
@@ -62,7 +64,7 @@ React + shadcn UI
 Tauri commands ── SQLite + FTS5 + sqlite-vec
         │
         ├─ OCR worker pool ── pdfium-render ── Tesseract/RapidOCR
-        ├─ AI naming ─────── OpenRouter/Ollama
+        ├─ AI naming ─────── Ollama (local)
         ├─ RAG chat ──────── fastembed + BGE chunks
         └─ Watcher/updater ─ notify + Tauri updater
 ```

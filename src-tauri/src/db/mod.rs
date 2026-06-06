@@ -14,7 +14,7 @@ pub struct AppDatabase {
 
 #[derive(Debug, Error)]
 pub enum DbError {
-    #[error("failed to determine the Windows APPDATA directory")]
+    #[error("failed to determine the application data directory")]
     MissingAppData,
     #[error("database IO error: {0}")]
     Io(#[from] std::io::Error),

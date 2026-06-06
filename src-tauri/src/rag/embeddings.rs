@@ -183,7 +183,7 @@ impl EmbeddingService {
 
 #[derive(Debug, Error)]
 pub enum EmbedError {
-    #[error("failed to resolve LOCALAPPDATA for embedding cache")]
+    #[error("failed to resolve the local data directory for the embedding cache")]
     MissingLocalAppData,
     #[error("embedding IO error: {0}")]
     Io(#[from] std::io::Error),

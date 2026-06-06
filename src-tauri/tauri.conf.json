@@ -62,7 +62,7 @@
       "active": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI3MDBENDVDNEVCQUQxREEKUldUYTBicE9YTlFBSjdmd3Q2WmZHc2YwVTdUMHR1NzFUZTJEYXB4czdmNFNnVGZ6a1Nidm5vaDcK",
       "endpoints": [
-        "https://github.com/<OWNER>/PDF-Parser/releases/latest/download/latest.json"
+        "https://github.com/GitHubCJ123/parsepdf/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

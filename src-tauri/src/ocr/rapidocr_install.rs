@@ -44,7 +44,7 @@ pub enum InstallError {
     },
     #[error("invalid RapidOCR manifest path: {0}")]
     InvalidManifestPath(String),
-    #[error("failed to resolve LOCALAPPDATA for RapidOCR engines")]
+    #[error("failed to resolve the local data directory for RapidOCR engines")]
     MissingLocalAppData,
     #[error("HTTP error while downloading RapidOCR models: {0}")]
     Http(#[from] reqwest::Error),
@@ -329,9 +329,12 @@ pub fn quick_check_install_dir(
         if !path.exists() {
             return Err(InstallError::MissingFile { path });
         }
-        let expected_size = file
-            .size
-            .or_else(|| marker.files.get(file.relative_path).map(|record| record.size));
+        let expected_size = file.size.or_else(|| {
+            marker
+                .files
+                .get(file.relative_path)
+                .map(|record| record.size)
+        });
         let Some(expected) = expected_size else {
             // No pinned or recorded size for this file => incomplete marker.
             return Err(InstallError::MissingFile { path });

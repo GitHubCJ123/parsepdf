@@ -12,10 +12,28 @@ on:
 permissions:
   contents: write
 
+env:
+  # Pinned PDFium build fetched for the macOS bundle. Matches the `pdfium-render`
+  # 0.8 crate's expected API. Bump alongside the Windows pdfium.dll when upgrading.
+  PDFIUM_VERSION: chromium/7869
+
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    timeout-minutes: 60
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ''
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            # Tauri automatically looks up and merges the platform-specific
+            # `src-tauri/tauri.macos.conf.json` (app/dmg targets, no Windows
+            # sidecar, pdfium dylib resource) — no explicit --config needed.
+            args: '--target aarch64-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -36,12 +54,31 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: .
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      # The PDFium dynamic library is only committed for Windows. Fetch the
+      # macOS (Apple Silicon) dylib so it is in place as a bundle resource
+      # (binaries/pdfium/libpdfium.dylib) before the Tauri build runs.
+      - name: (macOS) Fetch bundled PDFium dylib
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="src-tauri/binaries/pdfium"
+          mkdir -p "$dest"
+          encoded_tag="${PDFIUM_VERSION/\//%2F}"
+          url="https://github.com/bblanchon/pdfium-binaries/releases/download/${encoded_tag}/pdfium-mac-arm64.tgz"
+          echo "Downloading $url"
+          curl -fL "$url" -o pdfium-mac-arm64.tgz
+          tar -xzf pdfium-mac-arm64.tgz lib/libpdfium.dylib
+          mv lib/libpdfium.dylib "$dest/libpdfium.dylib"
+          ls -lh "$dest/libpdfium.dylib"
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
@@ -59,29 +96,158 @@ jobs:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: 'PDF-Parser ${{ env.RELEASE_TAG }}'
           releaseBody: |
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            ## Installers
+            - **Windows**: download the `.exe` (NSIS) or `.msi`. SmartScreen may warn "Unknown publisher" for this unsigned build — click "More info → Run anyway".
+            - **macOS (Apple Silicon)**: download the `.dmg`. This build is **unsigned**, so Gatekeeper blocks it on first launch. Right-click the app and choose **Open**, or run `xattr -dr com.apple.quarantine "/Applications/PDF-Parser.app"`.
 
-            **First-time install**: Windows SmartScreen will show "Unknown publisher" for this unsigned build. Click "More info → Run anyway" to proceed. SHA256 checksums are attached to this release for verification.
-          releaseDraft: false
+            SHA256 checksums are attached for verification. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          # Keep the release a draft until the updater manifest is merged and the
+          # publish-latest-json job finalizes it (so latest.json is correct
+          # before any client can pull it).
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: false
+          args: ${{ matrix.args }}
+
+      # tauri-action's own latest.json upload is racy across matrix platforms:
+      # each run overwrites it with only its own platform. We instead emit a
+      # per-platform fragment here and merge them in the publish-latest-json job.
+      - name: Generate updater manifest fragment
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p _updater
+
+          nsis_dir="src-tauri/target/release/bundle/nsis"
+          macos_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+
+          if [ -d "$nsis_dir" ]; then
+            sig_file=$(find "$nsis_dir" -name "*.exe.sig" | head -n1 || true)
+            exe_file=$(find "$nsis_dir" -name "*.exe" ! -name "*.sig" | head -n1 || true)
+            if [ -n "$sig_file" ] && [ -n "$exe_file" ]; then
+              sig=$(cat "$sig_file")
+              fname=$(basename "$exe_file")
+              # GitHub normalizes spaces in asset names to periods on upload.
+              fname_url=$(printf '%s' "$fname" | tr ' ' '.')
+              gh release upload "${RELEASE_TAG}" "$sig_file" --clobber --repo "$REPO"
+              url="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/$(printf '%s' "$fname_url" | jq -sRr @uri)"
+              for platform in windows-x86_64 windows-x86_64-nsis; do
+                jq -n --arg p "$platform" --arg s "$sig" --arg u "$url" \
+                  '{platform: $p, signature: $s, url: $u}' > "_updater/manifest-$platform.json"
+              done
+              echo "Wrote Windows manifest fragments for $fname_url"
+            else
+              echo "No Windows signature/exe pair found; skipping."
+            fi
+          fi
+
+          if [ -d "$macos_dir" ]; then
+            sig_file=$(find "$macos_dir" -name "*.app.tar.gz.sig" | head -n1 || true)
+            tar_file=$(find "$macos_dir" -name "*.app.tar.gz" ! -name "*.sig" | head -n1 || true)
+            if [ -n "$sig_file" ] && [ -n "$tar_file" ]; then
+              sig=$(cat "$sig_file")
+              fname=$(basename "$tar_file")
+              fname_url=$(printf '%s' "$fname" | tr ' ' '.')
+              gh release upload "${RELEASE_TAG}" "$tar_file" "$sig_file" --clobber --repo "$REPO"
+              url="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/$(printf '%s' "$fname_url" | jq -sRr @uri)"
+              jq -n --arg p "darwin-aarch64" --arg s "$sig" --arg u "$url" \
+                '{platform: $p, signature: $s, url: $u}' > "_updater/manifest-darwin-aarch64.json"
+              echo "Wrote macOS manifest fragment for $fname_url"
+            else
+              echo "No macOS signature/tar pair found; skipping."
+            fi
+          fi
+          ls -la _updater || true
+
+      - name: Upload manifest fragment
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-fragment-${{ matrix.platform }}
+          path: _updater/*.json
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Generate SHA256 checksums
-        shell: pwsh
+        shell: bash
         run: |
-          $bundleRoots = @('target/release/bundle', 'src-tauri/target/release/bundle') | Where-Object { Test-Path $_ }
-          $artifacts = $bundleRoots | ForEach-Object { Get-ChildItem -Path $_ -Recurse -Include *.msi, *.exe }
-          $artifacts | ForEach-Object {
-            $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash
-            "$hash  $($_.Name)" | Out-File -Append -FilePath checksums.txt -Encoding ascii
-          }
-          Get-Content checksums.txt
+          set -euo pipefail
+          checksum_file="checksums-${{ matrix.platform }}.txt"
+          : > "$checksum_file"
+          find src-tauri/target -path '*/bundle/*' \
+            \( -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) -print0 |
+          while IFS= read -r -d '' f; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              hash=$(sha256sum "$f" | awk '{print $1}')
+            else
+              hash=$(shasum -a 256 "$f" | awk '{print $1}')
+            fi
+            echo "$hash  $(basename "$f")" >> "$checksum_file"
+          done
+          cat "$checksum_file"
 
       - name: Attach checksums to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: checksums.txt
+          draft: true
+          files: checksums-${{ matrix.platform }}.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Merge the per-platform updater fragments into a single latest.json so the
+  # in-app updater sees every platform, then publish the (previously draft)
+  # release. Runs once after all matrix builds complete.
+  publish-latest-json:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Download fragments
+        uses: actions/download-artifact@v4
+        with:
+          path: fragments
+          pattern: updater-fragment-*
+          merge-multiple: true
+
+      - name: Build merged latest.json
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          pub_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          notes="See the release page for full notes."
+          platforms='{}'
+          shopt -s nullglob
+          for f in fragments/*.json; do
+            entry=$(cat "$f")
+            platform=$(printf '%s' "$entry" | jq -r .platform)
+            payload=$(printf '%s' "$entry" | jq '{signature, url}')
+            platforms=$(printf '%s' "$platforms" | jq --arg p "$platform" --argjson v "$payload" '. + {($p): $v}')
+          done
+          jq -n --arg v "$version" --arg d "$pub_date" --arg n "$notes" --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+          cat latest.json
+
+      - name: Upload latest.json to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${RELEASE_TAG}" latest.json --clobber --repo "${{ github.repository }}"
+
+      # Only publish (un-draft) for real tag pushes. Manual workflow_dispatch
+      # runs leave a draft so a dry-run can be inspected and deleted safely.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${RELEASE_TAG}" --draft=false --repo "${{ github.repository }}"

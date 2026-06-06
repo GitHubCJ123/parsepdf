@@ -122,7 +122,7 @@ export function LibraryPage() {
         {loading ? (
           <div className="grid place-items-center px-4 py-16 text-sm text-muted-foreground"><Loader2 className="mb-3 size-5 animate-spin" />Loading library…</div>
         ) : documents.length === 0 ? (
-          <EmptyState icon={LibraryIcon} title="Your library is empty" description="Process a PDF to start building your searchable archive." actionLabel="Go to Inbox" onAction={() => window.location.assign("/inbox")} />
+          <EmptyState icon={LibraryIcon} title="Your library is empty" description="Process a PDF to start building your searchable archive." actionLabel="Go to Upload" onAction={() => window.location.assign("/upload")} />
         ) : filteredDocuments.length === 0 ? (
           <EmptyState icon={Search} title="No matches" description="Try fewer or different words." />
         ) : (

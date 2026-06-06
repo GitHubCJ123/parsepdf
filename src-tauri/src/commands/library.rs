@@ -446,15 +446,27 @@ mod tests {
     #[test]
     fn strip_version_suffix_parses_v_numbers() {
         assert_eq!(strip_version_suffix("report"), ("report".to_string(), None));
-        assert_eq!(strip_version_suffix("report (v2)"), ("report".to_string(), Some(2)));
-        assert_eq!(strip_version_suffix("report (v10)"), ("report".to_string(), Some(10)));
+        assert_eq!(
+            strip_version_suffix("report (v2)"),
+            ("report".to_string(), Some(2))
+        );
+        assert_eq!(
+            strip_version_suffix("report (v10)"),
+            ("report".to_string(), Some(10))
+        );
         // Not a version suffix — left intact.
-        assert_eq!(strip_version_suffix("report (draft)"), ("report (draft)".to_string(), None));
+        assert_eq!(
+            strip_version_suffix("report (draft)"),
+            ("report (draft)".to_string(), None)
+        );
     }
 
     #[test]
     fn split_name_separates_stem_and_ext() {
-        assert_eq!(split_name("report.pdf"), ("report".to_string(), Some("pdf".to_string())));
+        assert_eq!(
+            split_name("report.pdf"),
+            ("report".to_string(), Some("pdf".to_string()))
+        );
         assert_eq!(split_name("report"), ("report".to_string(), None));
     }
 

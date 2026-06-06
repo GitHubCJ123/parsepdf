@@ -158,53 +158,54 @@ pub async fn chat_send(
     let retrieval_ms = retrieval_started.elapsed().as_millis() as i64;
 
     let generation_started = Instant::now();
-    let (content, provider_label, tokens_in, tokens_out, citation_refs, thinking) = if chunks.is_empty() {
-        let content = "I couldn't find that in your library.".to_string();
-        app.emit(
-            "chat:message:token",
-            ChatMessageTokenEvent {
-                id: assistant_message_id,
-                delta: content.clone(),
-            },
-        )
-        .map_err(|error| error.to_string())?;
-        (
-            content,
-            provider_id.clone(),
-            None,
-            None,
-            Vec::<CitationRef>::new(),
-            None,
-        )
-    } else {
-        let messages = build_prompt_messages(&message, &chunks);
-        let token_app = app.clone();
-        let response = provider
-            .stream_chat(
-                messages,
-                think,
-                Box::new(move |delta| {
-                    let _ = token_app.emit(
-                        "chat:message:token",
-                        ChatMessageTokenEvent {
-                            id: assistant_message_id,
-                            delta,
-                        },
-                    );
-                }),
+    let (content, provider_label, tokens_in, tokens_out, citation_refs, thinking) =
+        if chunks.is_empty() {
+            let content = "I couldn't find that in your library.".to_string();
+            app.emit(
+                "chat:message:token",
+                ChatMessageTokenEvent {
+                    id: assistant_message_id,
+                    delta: content.clone(),
+                },
             )
-            .await
             .map_err(|error| error.to_string())?;
-        let grounded = ground_citations(&response.content, &chunks);
-        (
-            grounded.content,
-            response.provider,
-            response.tokens_in.map(i64::from),
-            response.tokens_out.map(i64::from),
-            grounded.citations,
-            response.thinking,
-        )
-    };
+            (
+                content,
+                provider_id.clone(),
+                None,
+                None,
+                Vec::<CitationRef>::new(),
+                None,
+            )
+        } else {
+            let messages = build_prompt_messages(&message, &chunks);
+            let token_app = app.clone();
+            let response = provider
+                .stream_chat(
+                    messages,
+                    think,
+                    Box::new(move |delta| {
+                        let _ = token_app.emit(
+                            "chat:message:token",
+                            ChatMessageTokenEvent {
+                                id: assistant_message_id,
+                                delta,
+                            },
+                        );
+                    }),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let grounded = ground_citations(&response.content, &chunks);
+            (
+                grounded.content,
+                response.provider,
+                response.tokens_in.map(i64::from),
+                response.tokens_out.map(i64::from),
+                grounded.citations,
+                response.thinking,
+            )
+        };
     let generation_ms = generation_started.elapsed().as_millis() as i64;
     let citations =
         enrich_citations(&state.db_path, &citation_refs).map_err(|error| error.to_string())?;
@@ -296,10 +297,7 @@ pub fn chat_delete_thread(thread_id: i64, state: State<'_, AppState>) -> Result<
     // chat_messages.thread_id is ON DELETE CASCADE, and open_connection_at sets
     // PRAGMA foreign_keys=ON, so the messages are removed with the thread.
     connection
-        .execute(
-            "DELETE FROM chat_threads WHERE id = ?1",
-            params![thread_id],
-        )
+        .execute("DELETE FROM chat_threads WHERE id = ?1", params![thread_id])
         .map_err(|error| error.to_string())?;
     Ok(())
 }

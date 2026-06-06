@@ -46,37 +46,49 @@ impl AppState {
 }
 
 fn resolve_pdfium_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    let filename = pdfium_library_filename();
     let mut candidates = Vec::new();
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(
-            resource_dir
-                .join("binaries")
-                .join("pdfium")
-                .join("pdfium.dll"),
-        );
+        candidates.push(resource_dir.join("binaries").join("pdfium").join(filename));
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("binaries").join("pdfium").join("pdfium.dll"));
+        candidates.push(cwd.join("binaries").join("pdfium").join(filename));
         candidates.push(
             cwd.join("src-tauri")
                 .join("binaries")
                 .join("pdfium")
-                .join("pdfium.dll"),
+                .join(filename),
         );
     }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("binaries").join("pdfium").join("pdfium.dll"));
+            candidates.push(parent.join("binaries").join("pdfium").join(filename));
         }
     }
 
     candidates
         .into_iter()
         .find(|path| path.exists())
-        .ok_or_else(|| anyhow!("unable to locate bundled binaries/pdfium/pdfium.dll"))
+        .ok_or_else(|| anyhow!("unable to locate bundled binaries/pdfium/{filename}"))
+}
+
+/// Filename of the bundled PDFium dynamic library for the current platform.
+fn pdfium_library_filename() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "pdfium.dll"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "libpdfium.dylib"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "libpdfium.so"
+    }
 }
 
 #[cfg(test)]
@@ -88,7 +100,13 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join("pdfium")
-            .join("pdfium.dll");
+            .join(pdfium_library_filename());
+        // The PDFium dynamic library is only committed for Windows; on other
+        // platforms it is fetched during the release bundle step, so skip the
+        // load smoke-test when the binary is not present locally.
+        if !path.exists() {
+            return;
+        }
         Pdfium::bind_to_library(&path)
             .unwrap_or_else(|error| panic!("failed to load {}: {error}", path.display()));
     }

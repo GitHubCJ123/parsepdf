@@ -58,9 +58,11 @@ impl SecretError {
 // (a synchronous command here freezes the window while the vault unlocks).
 #[tauri::command]
 pub async fn secrets_set(key: String, value: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || set_secret(&key, &value).map_err(|error| error.public_message()))
-        .await
-        .map_err(|error| error.to_string())?
+    tokio::task::spawn_blocking(move || {
+        set_secret(&key, &value).map_err(|error| error.public_message())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

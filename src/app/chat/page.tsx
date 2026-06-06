@@ -299,8 +299,8 @@ function NoDocuments() {
       icon={MessageCircleOff}
       title="Add documents first"
       description="Process a few PDFs to enable chat over your library."
-      actionLabel="Go to Inbox"
-      onAction={() => window.location.assign("/inbox")}
+      actionLabel="Go to Upload"
+      onAction={() => window.location.assign("/upload")}
       className="min-h-[calc(100vh-7rem)]"
     />
   );

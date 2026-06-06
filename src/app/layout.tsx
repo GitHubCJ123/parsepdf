@@ -29,7 +29,7 @@ export function AppLayout() {
           <div className="font-mono text-sm font-medium tracking-[-0.03em] text-foreground">PDF-Parser</div>
           <div className="flex items-center gap-2">
             <ProviderStatusIndicator />
-            <Button type="button" size="sm" className="rounded-md" onClick={() => void navigate({ to: "/inbox" })}>
+            <Button type="button" size="sm" className="rounded-md" onClick={() => void navigate({ to: "/upload" })}>
               <Plus className="size-3.5" />
               New
             </Button>

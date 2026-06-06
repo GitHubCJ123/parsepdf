@@ -16,3 +16,10 @@ Regenerate the manifest snippet with:
 ```powershell
 .\scripts\gen_rapidocr_manifest.ps1
 ```
+
+## Which OCR engine should I use?
+
+| Engine | Speed | Accuracy | Languages | Download size | Best for |
+| --- | --- | --- | --- | ---: | --- |
+| Tesseract | Fastest and lightweight | Good for clean text | English and Latin-script documents | Bundled, no extra download | Everyday PDFs when you want quick offline OCR |
+| RapidOCR PP-OCRv5 | Slower than Tesseract | Higher accuracy on difficult scans | Multilingual, including CJK | Optional larger model download | Scans, tables, multi-column layouts, and non-Latin text |

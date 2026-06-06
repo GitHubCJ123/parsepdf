@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, CheckCircle2, Clock3, FileText, Inbox as InboxIcon, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Clock3, FileText, Loader2, Pause, Play, RotateCcw, Trash2, UploadCloud, XCircle } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { useOcrEngines } from "@/components/engine-selector";
 import { ErrorBanner } from "@/components/error-banner";
@@ -82,7 +82,7 @@ function clearDuplicateMark(path: string) {
   }, 5000);
 }
 
-export function InboxPage() {
+export function UploadPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [filter, setFilter] = useState<FilterTab>("all");
@@ -212,7 +212,7 @@ export function InboxPage() {
 
   const processPath = useCallback(async (path: string, batch?: BatchTracker) => {
     if (shouldSkipDuplicate(path)) {
-      console.debug("[inbox] skipped duplicate invoke for", path);
+      console.debug("[upload] skipped duplicate invoke for", path);
       return;
     }
     const engineId = selectedEngineId;
@@ -282,7 +282,7 @@ export function InboxPage() {
       if (payload.type === "drop") {
         setIsDragging(false);
         const paths = payload.paths ?? [];
-        console.debug("[inbox] drop event paths=", paths);
+        console.debug("[upload] drop event paths=", paths);
         const seen = new Set<string>();
         const pdfPaths: string[] = [];
         for (const path of paths) {
@@ -339,11 +339,11 @@ export function InboxPage() {
           <div className="space-y-4">
             <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/60 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-muted-foreground">
               <span className="size-1.5 rounded-full bg-foreground" />
-              OCR intake bay
+              Manual upload
             </div>
             <div>
-              <h1 className="max-w-3xl text-4xl font-semibold tracking-[-0.06em] text-foreground">Queue a shelf of PDFs without babysitting every file.</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">Drop batches here, pick files, or let Settings watch a folder. Progress arrives in throttled batches so 100+ documents stay smooth.</p>
+              <h1 className="max-w-3xl text-4xl font-semibold tracking-[-0.06em] text-foreground">Upload PDFs by hand for one-off OCR.</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">Drop batches here or pick files for ad-hoc processing. For hands-off intake, drop PDFs into a <Link to="/folders" className="font-medium text-foreground underline-offset-4 hover:underline">watched folder</Link> and they queue automatically. Progress arrives in throttled batches so 100+ documents stay smooth.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" size="lg" onClick={() => void choosePdf()}>
@@ -366,7 +366,7 @@ export function InboxPage() {
 
       <QualityUpgradePrompt lowConfidenceCount={lowConfidenceCount} scanLikeQueueCount={scanLikeQueueCount} rapidOcrInstalled={rapidOcrInstalled} onUseOnce={() => rapidOcrInstalled && setSelectedEngineId("rapidocr")} onSetDefault={() => { if (rapidOcrInstalled) { setSelectedEngineId("rapidocr"); void setDefaultOcrEngine("rapidocr"); } }} />
 
-      {persistentIssue ? <InboxIssueBanner issue={persistentIssue} retryFailed={retryFailed} openSettings={() => void navigate({ to: "/settings" })} /> : null}
+      {persistentIssue ? <UploadIssueBanner issue={persistentIssue} retryFailed={retryFailed} openSettings={() => void navigate({ to: "/settings" })} /> : null}
       {banners.map((banner) => (
         <ErrorBanner key={banner.id} severity={banner.severity} title={banner.title} message={banner.message} details={banner.details} dismissable onDismiss={() => setBanners((current) => current.filter((item) => item.id !== banner.id))} actions={[{ label: "Open settings", onClick: () => void navigate({ to: "/settings" }) }]} />
       ))}
@@ -420,7 +420,7 @@ export function InboxPage() {
         </div>
         {filteredJobs.length === 0 ? (
           jobs.length === 0 ? (
-            <EmptyState icon={InboxIcon} title="Nothing to process" description="Drag a PDF here, pick a file, or watch a folder." actionLabel="Choose file" onAction={() => void choosePdf()} />
+            <EmptyState icon={UploadCloud} title="Nothing to process" description="Drag a PDF here, pick a file, or watch a folder." actionLabel="Choose file" onAction={() => void choosePdf()} />
           ) : (
             <div className="px-4 py-12 text-center text-sm text-muted-foreground">No jobs match this filter.</div>
           )
@@ -448,7 +448,7 @@ export function InboxPage() {
   );
 }
 
-function InboxIssueBanner({ issue, retryFailed, openSettings }: { issue: BannerState; retryFailed: () => Promise<void>; openSettings: () => void }) {
+function UploadIssueBanner({ issue, retryFailed, openSettings }: { issue: BannerState; retryFailed: () => Promise<void>; openSettings: () => void }) {
   const actions = issue.title.includes("rate")
     ? [{ label: "Retry", onClick: () => void retryFailed() }]
     : issue.title.includes("Ollama")

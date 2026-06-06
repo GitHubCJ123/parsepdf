@@ -171,7 +171,9 @@ impl AiProvider for OllamaProvider {
                     .await
                     .map_err(map_stream_transport_error)?
             } else {
-                return Err(AiError::Unavailable(format!("Ollama returned 400: {detail}")));
+                return Err(AiError::Unavailable(format!(
+                    "Ollama returned 400: {detail}"
+                )));
             }
         } else {
             response

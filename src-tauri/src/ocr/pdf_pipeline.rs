@@ -821,6 +821,9 @@ mod tests {
             !output.starts_with(r"\\?\"),
             "output path must not be a verbatim path: {output}"
         );
-        assert!(output.ends_with("-abc123de-searchable.pdf"), "got: {output}");
+        assert!(
+            output.ends_with("-abc123de-searchable.pdf"),
+            "got: {output}"
+        );
     }
 }

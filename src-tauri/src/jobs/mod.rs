@@ -211,8 +211,7 @@ impl JobManager {
         )?;
         info!(
             document_id,
-            job_id,
-            "enqueue_ingest -> create_queued_job returned"
+            job_id, "enqueue_ingest -> create_queued_job returned"
         );
         self.run_tx
             .send(job_id)
@@ -356,16 +355,14 @@ impl JobManager {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => warn!(job_id, error = %error, "job execution failed"),
                 Err(join_error) if join_error.is_panic() => {
-                    warn!(job_id, "job panicked; marking it as error to keep the queue alive");
+                    warn!(
+                        job_id,
+                        "job panicked; marking it as error to keep the queue alive"
+                    );
                     let message = format!("Worker panicked: {join_error}");
                     if let Some(document_id) = job_document_id(&self.db_path, job_id).ok().flatten()
                     {
-                        let _ = mark_job_error(
-                            &self.db_path,
-                            job_id,
-                            Some(document_id),
-                            &message,
-                        );
+                        let _ = mark_job_error(&self.db_path, job_id, Some(document_id), &message);
                         let _ = update_document_status(
                             &self.db_path,
                             document_id,
@@ -1142,7 +1139,10 @@ mod tests {
 
         // A queue of only failed jobs (the reported bug) must still be clearable.
         let deleted = clear_completed_jobs(&db_path).unwrap();
-        assert_eq!(deleted, 3, "done, error, and cancelled jobs should be removed");
+        assert_eq!(
+            deleted, 3,
+            "done, error, and cancelled jobs should be removed"
+        );
 
         let conn = crate::db::open_connection_at(&db_path).unwrap();
         let remaining: Vec<String> = conn
@@ -1232,7 +1232,10 @@ mod tests {
 
         // The list query should now collapse to ONE row (the latest job per document).
         let listed = list_jobs(&db_path, None, 100).unwrap();
-        let for_doc: Vec<_> = listed.iter().filter(|s| s.document_id == Some(doc)).collect();
+        let for_doc: Vec<_> = listed
+            .iter()
+            .filter(|s| s.document_id == Some(doc))
+            .collect();
         assert_eq!(
             for_doc.len(),
             1,
@@ -1248,8 +1251,14 @@ mod tests {
         fs::write(&input_path, b"%PDF-1.4 rag").unwrap();
         let input_path = input_path.canonicalize().unwrap();
 
-        let (doc, ingest_job) =
-            create_queued_job(&db_path, &input_path, JobOrigin::Manual, Some("tesseract"), None).unwrap();
+        let (doc, ingest_job) = create_queued_job(
+            &db_path,
+            &input_path,
+            JobOrigin::Manual,
+            Some("tesseract"),
+            None,
+        )
+        .unwrap();
         // Simulate the RAG indexing pipeline inserting an 'embed' job after OCR.
         let conn = crate::db::open_connection_at(&db_path).unwrap();
         conn.execute(
@@ -1265,11 +1274,17 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(total_rows, 2, "test fixture should have both ingest and embed rows");
+        assert_eq!(
+            total_rows, 2,
+            "test fixture should have both ingest and embed rows"
+        );
         drop(conn);
 
         let listed = list_jobs(&db_path, None, 100).unwrap();
-        let for_doc: Vec<_> = listed.iter().filter(|s| s.document_id == Some(doc)).collect();
+        let for_doc: Vec<_> = listed
+            .iter()
+            .filter(|s| s.document_id == Some(doc))
+            .collect();
         assert_eq!(
             for_doc.len(),
             1,

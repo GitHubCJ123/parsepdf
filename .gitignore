@@ -42,3 +42,8 @@ samples/
 tauri_updater.key*
 *.pem
 engines/
+
+# Platform PDFium libraries fetched at build time.
+# The Windows pdfium.dll is committed; macOS/Linux libs are downloaded in CI.
+src-tauri/binaries/pdfium/libpdfium.dylib
+src-tauri/binaries/pdfium/libpdfium.so

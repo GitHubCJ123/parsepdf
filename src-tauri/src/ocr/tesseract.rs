@@ -538,7 +538,9 @@ mod tests {
 
         // Verbatim UNC -> plain UNC path.
         assert_eq!(
-            strip_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\app\binaries\tesseract")),
+            strip_verbatim_prefix(PathBuf::from(
+                r"\\?\UNC\server\share\app\binaries\tesseract"
+            )),
             PathBuf::from(r"\\server\share\app\binaries\tesseract")
         );
 

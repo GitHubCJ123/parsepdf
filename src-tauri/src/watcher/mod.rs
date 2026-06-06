@@ -16,16 +16,16 @@ use tauri::{AppHandle, Emitter};
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{info, warn};
 
-use crate::{db, ocr::pdf_pipeline};
+use crate::{ai, db, ocr::pdf_pipeline};
 
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(2);
 const STABILITY_WINDOW: Duration = Duration::from_secs(1);
 const DEDUP_WINDOW: Duration = Duration::from_secs(60 * 60);
-/// How often the watcher rescans every enabled folder while the app is open, to
-/// catch files that arrived without a filesystem event (network shares, sleep,
-/// copies that the OS coalesced, etc.). Already-ingested files are skipped, so a
-/// steady-state scan is cheap and never reprocesses anything.
-const PERIODIC_RESCAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const RESCAN_INTERVAL_SETTING_KEY: &str = "watcher.rescan_interval_secs";
+const DEFAULT_RESCAN_INTERVAL_SECS: u64 = 5 * 60;
+const MIN_RESCAN_INTERVAL_SECS: u64 = 30;
+const MAX_RESCAN_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const RESCAN_INTERVAL_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderConfig {
@@ -325,16 +325,16 @@ impl WatcherService {
         Ok(queued)
     }
 
-    /// Spawn a background task that rescans every enabled folder on a fixed
-    /// interval while the app is running. Files already in the library are
-    /// skipped by `queue_candidate`, so steady-state scans only pick up
-    /// genuinely new PDFs and never reprocess existing ones.
+    /// Spawn a background task that rescans every enabled folder on the
+    /// configured interval while the app is running. Files already in the
+    /// library are skipped by `queue_candidate`, so steady-state scans only pick
+    /// up genuinely new PDFs and never reprocess existing ones.
     pub fn spawn_periodic_rescan(&self) {
         let service = self.clone();
         let db_path = (*service.db_path).clone();
         tauri::async_runtime::spawn(async move {
             loop {
-                sleep(PERIODIC_RESCAN_INTERVAL).await;
+                wait_for_periodic_rescan(&db_path).await;
                 let enabled: Vec<PathBuf> = {
                     let folders = service
                         .folders
@@ -739,6 +739,41 @@ fn count_pdfs(path: &Path, recursive: bool) -> u32 {
     collect_pdf_candidates(path, recursive, &HashSet::new()).len() as u32
 }
 
+async fn wait_for_periodic_rescan(db_path: &Path) {
+    let started = Instant::now();
+    loop {
+        let interval = read_rescan_interval(db_path);
+        let elapsed = started.elapsed();
+        if elapsed >= interval {
+            break;
+        }
+        sleep((interval - elapsed).min(RESCAN_INTERVAL_CHECK_INTERVAL)).await;
+    }
+}
+
+fn read_rescan_interval(db_path: &Path) -> Duration {
+    match ai::setting(db_path, RESCAN_INTERVAL_SETTING_KEY) {
+        Ok(raw) => resolve_rescan_interval(raw),
+        Err(error) => {
+            warn!(
+                error = %error,
+                key = RESCAN_INTERVAL_SETTING_KEY,
+                "failed to read watcher rescan interval setting"
+            );
+            resolve_rescan_interval(None)
+        }
+    }
+}
+
+fn resolve_rescan_interval(raw: Option<String>) -> Duration {
+    let seconds = raw
+        .as_deref()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RESCAN_INTERVAL_SECS)
+        .clamp(MIN_RESCAN_INTERVAL_SECS, MAX_RESCAN_INTERVAL_SECS);
+    Duration::from_secs(seconds)
+}
+
 fn canonical_dir(path: &str) -> Result<PathBuf, WatcherError> {
     let canonical = PathBuf::from(path).canonicalize()?;
     if !canonical.is_dir() {
@@ -836,6 +871,46 @@ mod tests {
         assert!(should_ignore_filename("scan.tmp.pdf"));
         assert!(should_ignore_filename("download.crdownload"));
         assert!(!should_ignore_filename("normal PDF.PDF"));
+    }
+
+    #[test]
+    fn resolve_rescan_interval_uses_default_when_unset() {
+        assert_eq!(
+            resolve_rescan_interval(None),
+            Duration::from_secs(DEFAULT_RESCAN_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn resolve_rescan_interval_accepts_valid_seconds() {
+        assert_eq!(
+            resolve_rescan_interval(Some("600".to_string())),
+            Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn resolve_rescan_interval_clamps_below_minimum() {
+        assert_eq!(
+            resolve_rescan_interval(Some("10".to_string())),
+            Duration::from_secs(MIN_RESCAN_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn resolve_rescan_interval_uses_default_when_invalid() {
+        assert_eq!(
+            resolve_rescan_interval(Some("abc".to_string())),
+            Duration::from_secs(DEFAULT_RESCAN_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn resolve_rescan_interval_clamps_zero_to_minimum() {
+        assert_eq!(
+            resolve_rescan_interval(Some("0".to_string())),
+            Duration::from_secs(MIN_RESCAN_INTERVAL_SECS)
+        );
     }
 
     #[test]

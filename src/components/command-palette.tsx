@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { FilePlus2, FolderOpen, Inbox, Keyboard, Library, MessageSquareText, ScrollText, Search, Settings } from "lucide-react";
+import { FilePlus2, FolderOpen, Keyboard, Library, MessageSquareText, ScrollText, Search, Settings, UploadCloud } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   Command,
@@ -36,7 +36,7 @@ export function CommandPalette() {
   const setOpen = useUiStore((state) => state.setCommandPaletteOpen);
   const openShortcutHelp = useUiStore((state) => state.openShortcutHelp);
 
-  function go(to: "/inbox" | "/library" | "/search" | "/chat" | "/settings", after?: () => void) {
+  function go(to: "/upload" | "/folders" | "/library" | "/search" | "/chat" | "/settings", after?: () => void) {
     setOpen(false);
     void navigate({ to });
     if (after) window.setTimeout(after, 50);
@@ -59,17 +59,18 @@ export function CommandPalette() {
     {
       heading: "Navigate",
       items: [
-        { label: "Inbox", hint: "Process and queue PDFs", icon: Inbox, keywords: ["inbox", "queue", "process", "ocr", "upload"], run: () => go("/inbox") },
+        { label: "Folders", hint: "Watch folders for automatic intake", icon: FolderOpen, keywords: ["folders", "watch", "automatic", "intake", "monitor", "drop"], run: () => go("/folders") },
+        { label: "Upload", hint: "Manually process and queue PDFs", icon: UploadCloud, keywords: ["upload", "inbox", "queue", "process", "ocr", "manual"], run: () => go("/upload") },
         { label: "Library", hint: "Browse processed documents", icon: Library, keywords: ["library", "documents", "archive", "files"], run: () => go("/library") },
         { label: "Search", hint: "Full-text search", icon: Search, keywords: ["search", "find", "full text", "query"], shortcut: "Ctrl /", run: () => go("/search", focusGlobalSearch) },
         { label: "Chat", hint: "Ask questions about your library", icon: MessageSquareText, keywords: ["chat", "ask", "rag", "assistant", "ai"], run: () => go("/chat") },
-        { label: "Settings", hint: "OCR, AI, and folders", icon: Settings, keywords: ["settings", "preferences", "config", "options"], shortcut: "Ctrl ,", run: () => go("/settings") },
+        { label: "Settings", hint: "OCR, AI, and library", icon: Settings, keywords: ["settings", "preferences", "config", "options"], shortcut: "Ctrl ,", run: () => go("/settings") },
       ],
     },
     {
       heading: "Actions",
       items: [
-        { label: "Process new file", hint: "Open the inbox to add PDFs", icon: FilePlus2, keywords: ["new", "add", "process", "import", "upload", "pdf"], shortcut: "Ctrl N", run: () => go("/inbox") },
+        { label: "Process new file", hint: "Open Upload to add PDFs", icon: FilePlus2, keywords: ["new", "add", "process", "import", "upload", "pdf"], shortcut: "Ctrl N", run: () => go("/upload") },
         { label: "Open data folder", hint: "View app data on disk", icon: FolderOpen, keywords: ["data", "folder", "appdata", "storage", "explorer"], run: () => void openFolder("data") },
         { label: "Open logs folder", hint: "View diagnostic logs", icon: ScrollText, keywords: ["logs", "diagnostics", "debug", "troubleshoot"], run: () => void openFolder("logs") },
         { label: "Keyboard shortcuts", hint: "Show shortcut help", icon: Keyboard, keywords: ["keyboard", "shortcuts", "keys", "help", "hotkeys"], shortcut: "Ctrl ?", run: () => { setOpen(false); openShortcutHelp(); } },

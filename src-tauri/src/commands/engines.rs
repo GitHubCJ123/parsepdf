@@ -52,30 +52,34 @@ pub async fn ocr_list_engines(state: State<'_, AppState>) -> Result<Vec<EngineIn
     };
     let rapidocr_status = rapidocr_status(is_installing);
 
-    Ok(vec![
-        EngineInfo {
+    let mut engines = Vec::new();
+    // Tesseract is bundled as a Windows sidecar only; omit it entirely on
+    // platforms where it is not shipped so the UI never offers an engine that
+    // cannot run.
+    if tesseract_available() {
+        engines.push(EngineInfo {
             id: TESSERACT_ENGINE_ID.to_string(),
             name: "Tesseract".to_string(),
             description:
-                "Fast bundled OCR for everyday English documents. Offline and installed by default."
+                "Fast, lightweight, bundled OCR that works offline. Best for everyday English and Latin-script documents."
                     .to_string(),
             status: "installed".to_string(),
             size_mb: 50,
             is_default: default_engine == TESSERACT_ENGINE_ID,
             error: None,
-        },
-        EngineInfo {
-            id: RAPIDOCR_ENGINE_ID.to_string(),
-            name: "RapidOCR PP-OCRv5".to_string(),
-            description:
-                "High-quality ONNX OCR for scans, tables, multi-column layouts, and CJK text."
-                    .to_string(),
-            status: rapidocr_status.status,
-            size_mb: RAPIDOCR_V1.total_size_mb,
-            is_default: default_engine == RAPIDOCR_ENGINE_ID,
-            error: rapidocr_status.error,
-        },
-    ])
+        });
+    }
+    engines.push(EngineInfo {
+        id: RAPIDOCR_ENGINE_ID.to_string(),
+        name: "RapidOCR PP-OCRv5".to_string(),
+        description: "Higher-accuracy ONNX OCR with multilingual support including CJK. Good for scans, tables, and multi-column layouts; requires an optional larger download."
+            .to_string(),
+        status: rapidocr_status.status,
+        size_mb: RAPIDOCR_V1.total_size_mb,
+        is_default: default_engine == RAPIDOCR_ENGINE_ID,
+        error: rapidocr_status.error,
+    });
+    Ok(engines)
 }
 
 #[tauri::command]
@@ -138,7 +142,7 @@ pub async fn ocr_remove_engine(
 
     let current_default = read_default_engine(&state.db_path).map_err(|error| error.to_string())?;
     if current_default == RAPIDOCR_ENGINE_ID {
-        write_default_engine(&state.db_path, TESSERACT_ENGINE_ID)
+        write_default_engine(&state.db_path, fallback_engine())
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -147,7 +151,9 @@ pub async fn ocr_remove_engine(
 #[tauri::command]
 pub async fn ocr_set_default(state: State<'_, AppState>, engine_id: String) -> Result<(), String> {
     match engine_id.as_str() {
-        TESSERACT_ENGINE_ID => write_default_engine(&state.db_path, TESSERACT_ENGINE_ID),
+        TESSERACT_ENGINE_ID if tesseract_available() => {
+            write_default_engine(&state.db_path, TESSERACT_ENGINE_ID)
+        }
         RAPIDOCR_ENGINE_ID => {
             let target_dir = default_rapidocr_dir().map_err(|error| error.to_string())?;
             tokio::task::spawn_blocking(move || verify_install_dir(&target_dir, &RAPIDOCR_V1))
@@ -172,8 +178,26 @@ pub fn read_default_engine(db_path: &std::path::Path) -> Result<String, rusqlite
         .optional()?;
     Ok(match value.as_deref() {
         Some(RAPIDOCR_ENGINE_ID) => RAPIDOCR_ENGINE_ID.to_string(),
-        _ => TESSERACT_ENGINE_ID.to_string(),
+        Some(TESSERACT_ENGINE_ID) if tesseract_available() => TESSERACT_ENGINE_ID.to_string(),
+        _ => fallback_engine().to_string(),
     })
+}
+
+/// Tesseract is bundled as a Windows sidecar (`externalBin`) only. On other
+/// platforms it is not shipped yet, so callers must treat it as unavailable.
+fn tesseract_available() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// The OCR engine used when the user has not chosen one, or when their chosen
+/// engine is not available on this platform. Tesseract is the bundled default on
+/// Windows; elsewhere RapidOCR (downloaded on demand) is the only option.
+fn fallback_engine() -> &'static str {
+    if tesseract_available() {
+        TESSERACT_ENGINE_ID
+    } else {
+        RAPIDOCR_ENGINE_ID
+    }
 }
 
 fn write_default_engine(db_path: &std::path::Path, engine_id: &str) -> Result<(), rusqlite::Error> {
@@ -196,7 +220,9 @@ fn rapidocr_status(is_installing: bool) -> EngineRuntimeStatus {
     let Ok(target_dir) = default_rapidocr_dir() else {
         return EngineRuntimeStatus {
             status: "error".to_string(),
-            error: Some("Unable to resolve LOCALAPPDATA for RapidOCR models".to_string()),
+            error: Some(
+                "Unable to resolve the local data directory for RapidOCR models".to_string(),
+            ),
         };
     };
 

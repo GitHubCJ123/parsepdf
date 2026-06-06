@@ -19,14 +19,29 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/inbox" });
+    throw redirect({ to: "/folders" });
   },
 });
 
-const inboxRoute = createRoute({
+const foldersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/folders",
+  component: lazyRouteComponent(() => import("@/app/folders/page"), "FoldersPage"),
+});
+
+const uploadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/upload",
+  component: lazyRouteComponent(() => import("@/app/upload/page"), "UploadPage"),
+});
+
+// Back-compat: "/inbox" was renamed to "/upload". Redirect old links/bookmarks.
+const inboxRedirectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/inbox",
-  component: lazyRouteComponent(() => import("@/app/inbox/page"), "InboxPage"),
+  beforeLoad: () => {
+    throw redirect({ to: "/upload" });
+  },
 });
 
 const libraryRoute = createRoute({
@@ -55,7 +70,9 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  inboxRoute,
+  foldersRoute,
+  uploadRoute,
+  inboxRedirectRoute,
   libraryRoute,
   searchRoute,
   chatRoute,
