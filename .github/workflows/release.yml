@@ -61,6 +61,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
+          cache-on-failure: true
 
       # The PDFium dynamic library is only committed for Windows. Fetch the
       # macOS (Apple Silicon) dylib so it is in place as a bundle resource
@@ -123,10 +124,18 @@ jobs:
           set -euo pipefail
           mkdir -p _updater
 
-          nsis_dir="src-tauri/target/release/bundle/nsis"
-          macos_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          # Tauri bundles land in the Cargo workspace target dir, which is the
+          # repo-root `target/` here (root Cargo.toml is a [workspace]). Fall
+          # back to `src-tauri/target` for non-workspace setups.
+          resolve_dir() {
+            for root in target src-tauri/target; do
+              if [ -d "$root/$1" ]; then echo "$root/$1"; return; fi
+            done
+          }
+          nsis_dir="$(resolve_dir release/bundle/nsis)"
+          macos_dir="$(resolve_dir aarch64-apple-darwin/release/bundle/macos)"
 
-          if [ -d "$nsis_dir" ]; then
+          if [ -n "$nsis_dir" ]; then
             sig_file=$(find "$nsis_dir" -name "*.exe.sig" | head -n1 || true)
             exe_file=$(find "$nsis_dir" -name "*.exe" ! -name "*.sig" | head -n1 || true)
             if [ -n "$sig_file" ] && [ -n "$exe_file" ]; then
@@ -146,7 +155,7 @@ jobs:
             fi
           fi
 
-          if [ -d "$macos_dir" ]; then
+          if [ -n "$macos_dir" ]; then
             sig_file=$(find "$macos_dir" -name "*.app.tar.gz.sig" | head -n1 || true)
             tar_file=$(find "$macos_dir" -name "*.app.tar.gz" ! -name "*.sig" | head -n1 || true)
             if [ -n "$sig_file" ] && [ -n "$tar_file" ]; then
@@ -179,16 +188,23 @@ jobs:
           set -euo pipefail
           checksum_file="checksums-${{ matrix.platform }}.txt"
           : > "$checksum_file"
-          find src-tauri/target -path '*/bundle/*' \
-            \( -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) -print0 |
-          while IFS= read -r -d '' f; do
-            if command -v sha256sum >/dev/null 2>&1; then
-              hash=$(sha256sum "$f" | awk '{print $1}')
-            else
-              hash=$(shasum -a 256 "$f" | awk '{print $1}')
-            fi
-            echo "$hash  $(basename "$f")" >> "$checksum_file"
-          done
+          # Bundles live under the workspace target dir (repo-root `target/`),
+          # with `src-tauri/target` as a fallback. Only search dirs that exist.
+          roots=()
+          [ -d target ] && roots+=(target)
+          [ -d src-tauri/target ] && roots+=(src-tauri/target)
+          if [ ${#roots[@]} -gt 0 ]; then
+            find "${roots[@]}" -path '*/bundle/*' \
+              \( -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) -print0 |
+            while IFS= read -r -d '' f; do
+              if command -v sha256sum >/dev/null 2>&1; then
+                hash=$(sha256sum "$f" | awk '{print $1}')
+              else
+                hash=$(shasum -a 256 "$f" | awk '{print $1}')
+              fi
+              echo "$hash  $(basename "$f")" >> "$checksum_file"
+            done
+          fi
           cat "$checksum_file"
 
       - name: Attach checksums to release
