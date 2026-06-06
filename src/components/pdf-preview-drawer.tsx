@@ -1,5 +1,5 @@
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -38,7 +38,26 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [containerWidth, setContainerWidth] = useState(760);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  // Callback ref: the viewport only mounts after loading finishes, so a one-shot
+  // mount effect would miss it and leave containerWidth stuck at its initial
+  // value (which shrank the PDF). This attaches the observer whenever the node
+  // appears and measures it immediately.
+  const setViewportRef = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    if (!node) return;
+    setContainerWidth(node.clientWidth);
+    const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
+
+  // Full ordered text of the rendered page (one entry per pdf.js text item),
+  // captured via onGetTextSuccess. Needed for phrase highlighting: a phrase can
+  // span several items, so we match against the joined text, then mark only the
+  // matched slice inside each item.
+  const [textItems, setTextItems] = useState<string[]>([]);
 
   useEffect(() => {
     const next = clampPage(initialPage, pageCount);
@@ -53,13 +72,6 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [pageInput, pageCount]);
-
-  useEffect(() => {
-    if (!viewportRef.current) return;
-    const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
-    observer.observe(viewportRef.current);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,7 +106,20 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
   const pdfUrl = document?.output_path ? convertFileSrc(document.output_path) : null;
   const visibleHit = searchHits.find((hit) => hit.page_number === page);
   const terms = useMemo(() => searchTerms(searchQuery), [searchQuery]);
-  const renderWidth = zoom === "fit" ? Math.max(320, Math.min(containerWidth - 32, 880)) : undefined;
+  const renderWidth = zoom === "fit" ? Math.max(320, Math.min(containerWidth - 32, 1600)) : undefined;
+
+  // Per-item highlight ranges for the current phrase. Matches the phrase against
+  // the joined page text (so it crosses item boundaries), then maps each match
+  // back to the local character ranges inside each text item.
+  const itemHighlights = useMemo(() => computeItemHighlights(textItems, terms), [textItems, terms]);
+
+  // react-pdf calls this per text item; we return HTML with <mark> around only
+  // the matched slice. The DOM-<mark> path is what reliably renders highlights in
+  // this WebView, so phrase logic is precomputed and applied here per item.
+  const renderItem = useCallback(
+    ({ str, itemIndex }: { str: string; itemIndex: number }) => markItem(str, itemHighlights.get(itemIndex)),
+    [itemHighlights],
+  );
 
   async function openExternal() {
     if (!document) return;
@@ -113,7 +138,7 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
 
   return (
     <Dialog open={Boolean(detail || loading)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent showCloseButton={false} className="left-auto right-0 top-0 flex h-dvh w-full max-w-3xl translate-x-0 translate-y-0 grid-rows-none flex-col gap-0 rounded-none border-y-0 border-r-0 border-border bg-background/95 p-0 shadow-2xl shadow-black/50 backdrop-blur-xl sm:max-w-3xl">
+      <DialogContent showCloseButton={false} className="top-0 left-auto right-0 bottom-0 flex h-dvh w-[80vw] max-w-none translate-x-0 translate-y-0 grid-rows-none flex-col gap-0 rounded-none border-y-0 border-r-0 border-l border-border bg-background/95 p-0 shadow-2xl shadow-black/50 backdrop-blur-xl sm:max-w-none">
         <div className="flex items-start justify-between gap-4 border-b border-border p-4">
           <div className="min-w-0">
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{eyebrow}</p>
@@ -166,7 +191,7 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
                 </div>
               </div>
               {searchError ? <p className="text-xs text-destructive">Search failed. Try different words.</p> : null}
-              {visibleHit ? <Snippet html={visibleHit.snippet_html} /> : null}
+              {visibleHit ? <Snippet snippetHtml={visibleHit.snippet_html} terms={terms} /> : null}
               {searchHits.length > 0 ? (
                 <div className="flex gap-1 overflow-x-auto pb-1">
                   {searchHits.slice(0, 24).map((hit) => (
@@ -176,7 +201,7 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
               ) : null}
             </div>
 
-            <div ref={viewportRef} className="min-h-0 flex-1 overflow-auto bg-black/25 p-4">
+            <div ref={setViewportRef} className="min-h-0 flex-1 overflow-auto bg-black/25 p-4">
               {pdfUrl ? (
                 <div className="mx-auto w-fit max-w-full">
                   <Document file={pdfUrl} loading={<PreviewLoader />} error={<PreviewError />}>
@@ -186,7 +211,8 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
                       renderTextLayer
                       width={renderWidth}
                       scale={zoom === "fit" ? undefined : zoom}
-                      customTextRenderer={({ str }: { str: string }) => highlightText(str, terms)}
+                      customTextRenderer={renderItem}
+                      onGetTextSuccess={({ items }) => setTextItems(items.map((item) => ("str" in item ? item.str : "")))}
                       loading={<PreviewLoader />}
                     />
                   </Document>
@@ -218,7 +244,16 @@ function PreviewError() {
   return <div className="grid h-96 place-items-center rounded-lg border border-border bg-background p-6 text-sm text-muted-foreground">Preview could not load. Open the PDF externally.</div>;
 }
 
-function Snippet({ html }: { html: string }) {
+function Snippet({ snippetHtml, terms }: { snippetHtml: string; terms: string[] }) {
+  // The backend snippet marks EVERY matched FTS token (incl. stop words like
+  // "the"/"of"). Re-highlight from the plain text with the same stop-word-aware
+  // terms the PDF uses, so the two stay consistent.
+  const html = useMemo(() => {
+    const template = document.createElement("template");
+    template.innerHTML = snippetHtml;
+    const text = template.content.textContent ?? "";
+    return highlightText(text, terms);
+  }, [snippetHtml, terms]);
   return <div className="rounded-lg border border-border bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground [&_mark]:rounded [&_mark]:bg-amber-400/25 [&_mark]:px-0.5 [&_mark]:text-amber-100" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -231,21 +266,127 @@ function clampPage(value: number, max: number) {
 }
 
 function searchTerms(query: string) {
-  return query.toLowerCase().split(/\s+/).map((term) => term.replace(/[^\p{L}\p{N}_-]/gu, "")).filter((term) => term.length > 1).slice(0, 8);
+  // Ordered query tokens (NOT deduped — order matters for phrase matching).
+  // Keep the punctuation people actually search for ( - / ( ) ) so things like
+  // "(1754-1783)" or "and/or" can be matched; strip only stray noise.
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((term) => term.replace(/[^\p{L}\p{N}_/()-]/gu, ""))
+    .filter((term) => term.length > 0)
+    .slice(0, 24);
 }
 
 function highlightText(text: string, terms: string[]) {
-  if (terms.length === 0) return text;
-  let result = escapeHtml(text);
-  for (const term of terms) {
-    const escaped = escapeRegex(escapeHtml(term));
-    result = result.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+  // PHRASE match: the words must appear consecutively (separated only by
+  // whitespace), so "the anatomy of a revolution" highlights ONLY where that
+  // whole phrase occurs together — not every stray "of"/"a". A single-word
+  // query still works (the phrase is just that one word).
+  const pattern = buildPhraseRegex(terms, "\\s+");
+  if (!pattern) return escapeHtml(text);
+  let result = "";
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (match[0].length === 0) continue;
+    result += escapeHtml(text.slice(last, index));
+    result += `<mark>${escapeHtml(match[0])}</mark>`;
+    last = index + match[0].length;
   }
+  result += escapeHtml(text.slice(last));
   return result;
+}
+
+// Hyphen the user types should also match the unicode dash variants PDFs use
+// for ranges (en/em dash, figure dash, minus) — e.g. typed "1754-1783" matches
+// rendered "1754–1783".
+const DASH_VARIANTS = "[-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]";
+
+function termToRegex(term: string) {
+  // Allow optional whitespace around a typed hyphen so "1754-1783" also matches a
+  // rendered range that pdf.js split into separate spans ("1754 – 1783").
+  return escapeRegex(term).replace(/-/g, `\\s*${DASH_VARIANTS}\\s*`);
+}
+
+// Build a phrase regex from ordered query words. Each word is matched literally
+// (special chars like ( ) / - are escaped/handled), words are joined by `gap`
+// whitespace, and word-boundary lookarounds are only applied on an end that is
+// an actual word char — so "(1754-1783)" still matches even though it starts and
+// ends with punctuation.
+function buildPhraseRegex(words: string[], gap: string): RegExp | null {
+  const clean = words.filter((word) => word.length > 0);
+  if (clean.length === 0) return null;
+  const phrase = clean.map(termToRegex).join(gap);
+  const isWordChar = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
+  const pre = isWordChar(clean[0][0]) ? "(?<![\\p{L}\\p{N}])" : "";
+  const post = isWordChar(clean[clean.length - 1].slice(-1)) ? "(?![\\p{L}\\p{N}])" : "";
+  try {
+    return new RegExp(`${pre}(?:${phrase})${post}`, "giu");
+  } catch {
+    return null;
+  }
 }
 
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Compute, for each pdf.js text item, the local character ranges that fall
+// inside a phrase match. The page is split into many items (often one word
+// each, with the spaces between them dropped), so we join the items with a
+// single space, match the phrase against that joined text, then map each match
+// back to per-item [start, end) slices.
+function computeItemHighlights(items: string[], terms: string[]): Map<number, [number, number][]> {
+  const result = new Map<number, [number, number][]>();
+  const clean = terms.filter((term) => term.length > 0);
+  if (items.length === 0 || clean.length === 0) return result;
+
+  // Track where each item sits within the joined string (with a 1-char " "
+  // separator between items, mirroring how the words actually read).
+  const spans: { index: number; start: number; end: number }[] = [];
+  let joined = "";
+  items.forEach((str, index) => {
+    if (joined.length > 0) joined += " ";
+    const start = joined.length;
+    joined += str;
+    spans.push({ index, start, end: start + str.length });
+  });
+
+  const pattern = buildPhraseRegex(clean, "\\s*");
+  if (!pattern) return result;
+
+  for (const match of joined.matchAll(pattern)) {
+    const mStart = match.index ?? 0;
+    const mEnd = mStart + match[0].length;
+    if (mEnd <= mStart) continue;
+    for (const span of spans) {
+      const from = Math.max(span.start, mStart);
+      const to = Math.min(span.end, mEnd);
+      if (to <= from) continue;
+      const local: [number, number] = [from - span.start, to - span.start];
+      const existing = result.get(span.index);
+      if (existing) existing.push(local);
+      else result.set(span.index, [local]);
+    }
+  }
+  return result;
+}
+
+// Build the HTML react-pdf sets as a text item's innerHTML: the item text with
+// <mark> wrapped around each highlighted slice. Everything is HTML-escaped.
+function markItem(str: string, ranges?: [number, number][]) {
+  if (!ranges || ranges.length === 0) return escapeHtml(str);
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  let result = "";
+  let cursor = 0;
+  for (const [start, end] of sorted) {
+    const from = Math.max(cursor, start);
+    if (from > cursor) result += escapeHtml(str.slice(cursor, from));
+    if (end > from) result += `<mark>${escapeHtml(str.slice(from, end))}</mark>`;
+    cursor = Math.max(cursor, end);
+  }
+  result += escapeHtml(str.slice(cursor));
+  return result;
 }
 
 function escapeHtml(value: string) {

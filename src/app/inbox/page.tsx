@@ -374,6 +374,16 @@ function EnginePicker({ engines, selectedEngineId, onChange }: { engines: Engine
 function mergeJobRows(current: QueueJob[], rows: JobSummary[]) {
   const map = new Map(current.map((job) => [job.id, job]));
   for (const row of rows) map.set(row.id, { ...map.get(row.id), ...row, progress_pct: Math.max(map.get(row.id)?.progress_pct ?? 0, row.progress_pct ?? 0) });
+  // Drop terminal jobs the server no longer returns (e.g. "Clear completed"
+  // removed them). Without this the merge would keep stale cleared rows until
+  // the page remounts. Only terminal jobs are pruned so a live/optimistic job
+  // that isn't in this page of results can't flicker out.
+  const rowIds = new Set(rows.map((row) => row.id));
+  for (const job of current) {
+    if (!rowIds.has(job.id) && (job.status === "done" || job.status === "error" || job.status === "cancelled")) {
+      map.delete(job.id);
+    }
+  }
   return [...map.values()].sort((a, b) => b.created_at - a.created_at || b.id - a.id);
 }
 
