@@ -101,9 +101,9 @@ jobs:
             - **macOS (Apple Silicon)**: download the `.dmg`. This build is **unsigned**, so Gatekeeper blocks it on first launch. Right-click the app and choose **Open**, or run `xattr -dr com.apple.quarantine "/Applications/PDF-Parser.app"`.
 
             SHA256 checksums are attached for verification. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-          # Keep the release a draft until the updater manifest is merged and the
-          # publish-latest-json job finalizes it (so latest.json is correct
-          # before any client can pull it).
+          # The release is always left as a draft (here and for tag pushes) so
+          # you can review the installers and merged latest.json, then publish
+          # it manually from the GitHub Releases page when you're ready.
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
@@ -242,12 +242,3 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${RELEASE_TAG}" latest.json --clobber --repo "${{ github.repository }}"
-
-      # Only publish (un-draft) for real tag pushes. Manual workflow_dispatch
-      # runs leave a draft so a dry-run can be inspected and deleted safely.
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release edit "${RELEASE_TAG}" --draft=false --repo "${{ github.repository }}"
