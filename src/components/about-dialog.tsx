@@ -31,7 +31,6 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
   const [version, setVersion] = useState("0.1.0");
   const [checking, setChecking] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const sha = import.meta.env.VITE_GIT_SHA || "unknown";
 
   useEffect(() => {
     if (open) void getVersion().then(setVersion).catch(() => undefined);
@@ -72,9 +71,8 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
             </div>
           </DialogHeader>
 
-          <div className="grid gap-3 rounded-lg border border-border bg-background/45 p-4 text-sm sm:grid-cols-2">
+          <div className="grid gap-3 rounded-lg border border-border bg-background/45 p-4 text-sm">
             <Meta label="Version" value={version} />
-            <Meta label="Commit" value={sha.slice(0, 12)} />
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
