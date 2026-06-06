@@ -205,15 +205,18 @@ pub fn library_check_duplicate(
     Ok(DuplicateCheck::New)
 }
 
-/// Re-run OCR for an existing document (reuses its row). Used by the duplicate
-/// modal's "Reprocess" button, keeping the document's original OCR engine.
+/// Re-run OCR for an existing document (reuses its row, matched by SHA256 of
+/// the original source). Used by the duplicate modal and the Library "Reprocess"
+/// action. `engine_override` lets the caller pick a different OCR engine; when
+/// `None` the document's current engine is kept.
 #[tauri::command]
 pub async fn library_force_reprocess(
     document_id: i64,
+    engine_override: Option<String>,
     manager: State<'_, JobManager>,
     state: State<'_, AppState>,
 ) -> Result<JobSummary, String> {
-    let (original_path, engine) = {
+    let (original_path, stored_engine) = {
         let connection =
             db::open_connection_at(&state.db_path).map_err(|error| error.to_string())?;
         connection
@@ -224,6 +227,17 @@ pub async fn library_force_reprocess(
             )
             .map_err(|error| error.to_string())?
     };
+    // Reprocessing re-reads the ORIGINAL source so the SHA256 still matches this
+    // document's row. If that file is gone, re-OCR isn't possible from here.
+    if !Path::new(&original_path).is_file() {
+        return Err(format!(
+            "The original file is no longer available at {original_path}, so it can't be reprocessed."
+        ));
+    }
+    let engine = engine_override
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or(stored_engine);
     manager
         .enqueue_ingest(IngestJob {
             source_path: original_path.into(),

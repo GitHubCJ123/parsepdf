@@ -149,7 +149,14 @@ export function LibraryPage() {
         )}
       </section>
 
-      <PdfPreviewDrawer detail={detail} loading={detailLoading} initialPage={previewPage} onClose={() => { setSelectedId(null); setPreviewPage(1); }} onDelete={deleteSelected} />
+      <PdfPreviewDrawer
+        detail={detail}
+        loading={detailLoading}
+        initialPage={previewPage}
+        onClose={() => { setSelectedId(null); setPreviewPage(1); }}
+        onDelete={deleteSelected}
+        onReprocessed={() => { setSelectedId(null); setPreviewPage(1); void refresh(); }}
+      />
 
       <ConfirmDialog
         open={pendingDelete != null}

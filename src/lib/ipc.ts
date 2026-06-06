@@ -455,8 +455,8 @@ export function libraryCheckDuplicate(inputPath: string) {
   return invoke<DuplicateCheck>("library_check_duplicate", { inputPath });
 }
 
-export function libraryForceReprocess(documentId: number) {
-  return invoke<JobSummary>("library_force_reprocess", { documentId });
+export function libraryForceReprocess(documentId: number, engineId?: string) {
+  return invoke<JobSummary>("library_force_reprocess", { documentId, engineOverride: engineId ?? null });
 }
 
 export function searchDocuments(query: SearchQuery) {

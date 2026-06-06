@@ -4,12 +4,12 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
-import { Copy, ExternalLink, Loader2, Search, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, Copy, ExternalLink, Loader2, RotateCcw, Search, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { type DocumentDetail, libraryOpenExternal, type SearchHit, searchDocument } from "@/lib/ipc";
+import { type DocumentDetail, type EngineInfo, libraryForceReprocess, libraryOpenExternal, listOcrEngines, type SearchHit, searchDocument } from "@/lib/ipc";
 import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -21,13 +21,16 @@ type PdfPreviewDrawerProps = {
   initialPage: number;
   onClose: () => void;
   onDelete?: (documentId: number) => Promise<void>;
+  /** Provided by the Library: enables the "Reprocess with engine" control and
+   * is called after a reprocess job is queued so the caller can refresh/close. */
+  onReprocessed?: () => void;
   eyebrow?: string;
   citation?: ReactNode;
 };
 
 type ZoomMode = number | "fit";
 
-export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDelete, eyebrow = "Preview drawer", citation }: PdfPreviewDrawerProps) {
+export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDelete, onReprocessed, eyebrow = "Preview drawer", citation }: PdfPreviewDrawerProps) {
   const document = detail?.document ?? null;
   const pageCount = Math.max(1, document?.page_count ?? 1);
   const [page, setPage] = useState(clampPage(initialPage, pageCount));
@@ -136,6 +139,42 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
     notifySuccess("Path copied.");
   }
 
+  // Reprocess (Library only): load installed engines and re-run OCR with the
+  // chosen one. Source is the original file (matched by SHA256), so the doc row
+  // is reused rather than duplicated.
+  const [engines, setEngines] = useState<EngineInfo[]>([]);
+  const [reprocessEngine, setReprocessEngine] = useState("");
+  const [reprocessing, setReprocessing] = useState(false);
+  const installedEngines = useMemo(() => engines.filter((engine) => engine.status === "installed"), [engines]);
+
+  useEffect(() => {
+    if (!onReprocessed) return;
+    let cancelled = false;
+    void listOcrEngines().then((list) => { if (!cancelled) setEngines(list); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [onReprocessed]);
+
+  useEffect(() => {
+    // Default the picker to the document's current engine.
+    setReprocessEngine(document?.ocr_engine ?? "");
+  }, [document?.id, document?.ocr_engine]);
+
+  async function handleReprocess() {
+    if (!document) return;
+    const engineId = reprocessEngine || document.ocr_engine || installedEngines[0]?.id;
+    setReprocessing(true);
+    try {
+      await libraryForceReprocess(document.id, engineId ?? undefined);
+      const label = installedEngines.find((engine) => engine.id === engineId)?.name ?? engineId ?? "default engine";
+      notifySuccess(`Reprocessing with ${label}…`);
+      onReprocessed?.();
+    } catch (error) {
+      notifyError(`Reprocess failed. ${String(error)}`);
+    } finally {
+      setReprocessing(false);
+    }
+  }
+
   return (
     <Dialog open={Boolean(detail || loading)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent showCloseButton={false} className="top-0 left-auto right-0 bottom-0 flex h-dvh w-[80vw] max-w-none translate-x-0 translate-y-0 grid-rows-none flex-col gap-0 rounded-none border-y-0 border-r-0 border-l border-border bg-background/95 p-0 shadow-2xl shadow-black/50 backdrop-blur-xl sm:max-w-none">
@@ -222,12 +261,37 @@ export function PdfPreviewDrawer({ detail, loading, initialPage, onClose, onDele
               )}
             </div>
 
-            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-4">
-              <div className="flex flex-wrap gap-2">
+            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="outline" onClick={() => void openExternal()} disabled={!document.output_path}><ExternalLink className="size-4" />Open externally</Button>
                 <Button type="button" variant="outline" onClick={() => void copyPath()} disabled={!document.output_path}><Copy className="size-4" />Copy path</Button>
               </div>
-              {onDelete ? <Button type="button" variant="destructive" onClick={() => void onDelete(document.id)}><Trash2 className="size-4" />Delete</Button> : null}
+              <div className="flex flex-wrap items-center gap-2">
+                {onReprocessed && installedEngines.length > 0 ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 p-1.5 pl-3 shadow-sm">
+                    <RotateCcw className="size-4 text-foreground/80" />
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-foreground/80">Re-OCR with</span>
+                    <div className="relative">
+                      <select
+                        value={reprocessEngine || document.ocr_engine || installedEngines[0]?.id}
+                        onChange={(event) => setReprocessEngine(event.target.value)}
+                        disabled={reprocessing}
+                        className="h-9 appearance-none rounded-lg border border-input bg-background pl-3 pr-8 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [color-scheme:dark]"
+                      >
+                        {installedEngines.map((engine) => (
+                          <option key={engine.id} value={engine.id} className="bg-popover text-popover-foreground">{engine.name}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+                    <Button type="button" onClick={() => void handleReprocess()} disabled={reprocessing}>
+                      {reprocessing ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                      Reprocess
+                    </Button>
+                  </div>
+                ) : null}
+                {onDelete ? <Button type="button" variant="destructive" onClick={() => void onDelete(document.id)}><Trash2 className="size-4" />Delete</Button> : null}
+              </div>
             </footer>
           </>
         )}
