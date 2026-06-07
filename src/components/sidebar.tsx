@@ -41,9 +41,9 @@ export function Sidebar() {
         collapsed ? "w-[4.25rem]" : "w-60",
       )}
     >
-      <div className="flex h-14 items-center justify-between px-3">
+      <div data-tauri-drag-region className="flex h-14 items-center justify-between px-3">
         {!collapsed && (
-          <div className="flex items-center gap-2">
+          <div data-tauri-drag-region className="flex items-center gap-2">
             <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background/60 text-foreground shadow-sm shadow-black/20">
               <FileText className="size-4" />
             </span>
@@ -73,11 +73,11 @@ export function Sidebar() {
               title={collapsed ? item.label : undefined}
               activeProps={{ "data-active": true }}
               className={cn(
-                "group flex h-9 items-center gap-3 rounded-md px-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground",
+                "group flex h-10 items-center gap-3 rounded-md px-2 text-[0.95rem] text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground",
                 collapsed && "justify-center",
               )}
             >
-              <Icon className="size-4 shrink-0" />
+              <Icon className="size-[1.15rem] shrink-0" />
               {!collapsed && <span>{item.label}</span>}
             </Link>
           );

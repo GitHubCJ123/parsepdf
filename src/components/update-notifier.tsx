@@ -4,6 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
+import { getSetting } from "@/lib/db";
 import {
   Dialog,
   DialogContent,
@@ -117,6 +118,12 @@ export function UpdateNotifier() {
 
   const checkForUpdates = useCallback(async () => {
     try {
+      // Respect the user's "Automatic update checks" setting (Settings → Updates).
+      // The manual "Check for updates" button there bypasses this.
+      const autoCheck = await getSetting("updater.auto_check").catch(() => null);
+      if (autoCheck === "0") {
+        return;
+      }
       const nextUpdate = await check();
       if (nextUpdate) {
         setUpdate(nextUpdate);

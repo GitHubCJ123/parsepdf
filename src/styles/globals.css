@@ -78,7 +78,10 @@
 
   html {
     @apply bg-background font-sans antialiased;
-    font-size: 14px;
+    /* Root size for the rem-based UI. 16px is the browser default; we run a
+       touch tighter for density. Bump toward 16px if the UI feels small on
+       large / high-DPI monitors. */
+    font-size: 15px;
     text-rendering: geometricPrecision;
   }
 

@@ -42,6 +42,16 @@ pub fn run() {
     let database_url = db::database_url().expect("failed to resolve PDF-Parser database path");
 
     tauri::Builder::default()
+        // Single-instance MUST be the first plugin registered. When a second
+        // launch is attempted, focus the existing window instead of opening a
+        // new process/window.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())

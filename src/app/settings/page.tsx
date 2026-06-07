@@ -1,6 +1,10 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, ChevronDown, Copy, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, ShieldAlert, SlidersHorizontal, Trash2 } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { CheckCircle2, ChevronDown, Copy, DownloadCloud, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, RotateCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
 import { EngineSelector } from "@/components/engine-selector";
 import { Button } from "@/components/ui/button";
@@ -234,60 +238,56 @@ export function SettingsPage() {
         )}
 
         {activeSection === "ai" && (
-          <SettingsCard title="AI providers" eyebrow="Review before rename">
-            <div className="rounded-lg border border-border bg-background/45 p-4 text-sm leading-6 text-muted-foreground">
-              Ollama runs entirely on your machine — free, offline, and private. Point PDF-Parser at your local Ollama server and choose a model to use Chat over your library.
-            </div>
-            <div className="grid gap-4">
-              <label className="space-y-2">
-                <span className="text-sm font-medium">Default provider</span>
-                <select className="h-9 w-full max-w-xs rounded-lg border border-input bg-background px-3 text-sm" value={provider} onChange={(event) => void persistProvider(event.target.value as Provider)}>
-                  <option value="none">None</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </label>
+          <SettingsCard title="AI providers" eyebrow="Chat & naming">
+            <div className="flex items-start gap-3 rounded-xl border border-border bg-background/45 p-4">
+              <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-secondary/50 text-foreground">
+                <Sparkles className="size-4" />
+              </span>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Ollama runs entirely on your machine — free, offline, and private. Point PDF-Parser at your local Ollama server and pick a model to power Chat over your library. Toggle it off to keep the app fully OCR-only.
+              </p>
             </div>
 
-            <div className="grid gap-4">
-              <ProviderCard title="Ollama" status={ollamaStatus} message={ollamaMessage}>
-                <label className="space-y-2">
-                  <span className="text-sm font-medium">Base URL</span>
-                  <Input value={ollamaBaseUrl} onChange={(event) => setOllamaBaseUrl(event.target.value)} placeholder={DEFAULT_OLLAMA_URL} />
-                </label>
-                <label className="space-y-2">
-                  <span className="text-sm font-medium">Model</span>
-                  {ollamaModels.length > 0 ? (
-                    <select
-                      value={ollamaModels.includes(ollamaModel) ? ollamaModel : ollamaModels[0]}
-                      onChange={(event) => setOllamaModel(event.target.value)}
-                      className="flex h-9 w-full rounded-md border border-border bg-card px-3 py-1 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      {ollamaModels.map((model) => <option key={model} value={model}>{model}</option>)}
-                    </select>
-                  ) : (
-                    <>
-                      <Input list="ollama-models" value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} placeholder="No installed models detected" />
-                      <datalist id="ollama-models">
-                        {[...new Set(["llama3.1", ...ollamaModels])].map((model) => <option key={model} value={model} />)}
-                      </datalist>
-                      <p className="text-xs text-muted-foreground">Run an Ollama model first (e.g. <code className="font-mono">ollama pull llama3.1</code>) then test the connection.</p>
-                    </>
-                  )}
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={() => void saveOllama()}>Save</Button>
-                  <Button type="button" onClick={() => void testOllama()} disabled={ollamaStatus === "testing"}>
-                    {ollamaStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-                    Test connection
-                  </Button>
-                </div>
-              </ProviderCard>
-            </div>
+            <ProviderCard
+              title="Ollama"
+              status={ollamaStatus}
+              message={ollamaMessage}
+              enabled={provider === "ollama"}
+              onToggle={(next) => void persistProvider(next ? "ollama" : "none")}
+            >
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">Base URL</span>
+                <Input className="h-10" value={ollamaBaseUrl} onChange={(event) => setOllamaBaseUrl(event.target.value)} placeholder={DEFAULT_OLLAMA_URL} />
+              </label>
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">Model</span>
+                {ollamaModels.length > 0 ? (
+                  <SettingSelect widthClass="w-full" value={ollamaModels.includes(ollamaModel) ? ollamaModel : ollamaModels[0]} onChange={setOllamaModel}>
+                    {ollamaModels.map((model) => <option key={model} value={model} className="bg-popover text-popover-foreground">{model}</option>)}
+                  </SettingSelect>
+                ) : (
+                  <>
+                    <Input className="h-10" list="ollama-models" value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} placeholder="No installed models detected" />
+                    <datalist id="ollama-models">
+                      {[...new Set(["llama3.1", ...ollamaModels])].map((model) => <option key={model} value={model} />)}
+                    </datalist>
+                    <p className="text-xs leading-5 text-muted-foreground">Run an Ollama model first (e.g. <code className="rounded bg-secondary px-1 py-0.5 font-mono">ollama pull llama3.1</code>) then test the connection.</p>
+                  </>
+                )}
+              </label>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button type="button" variant="outline" onClick={() => void saveOllama()}>Save</Button>
+                <Button type="button" onClick={() => void testOllama()} disabled={ollamaStatus === "testing"}>
+                  {ollamaStatus === "testing" ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+                  Test connection
+                </Button>
+              </div>
+            </ProviderCard>
           </SettingsCard>
         )}
 
         {activeSection === "library" && <LibrarySettings />}
-        {activeSection === "updates" && <Stub title="Updates" text="The updater checks signed GitHub release artifacts and prepares installs on quit." />}
+        {activeSection === "updates" && <UpdatesSettings />}
         {activeSection === "about" && (
           <SettingsCard title="About" eyebrow="Version and logs">
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background/45 p-4">
@@ -411,14 +411,14 @@ function SettingRow({ icon: Icon, title, description, children }: { icon: typeof
   );
 }
 
-function SettingSelect({ value, disabled, onChange, children }: { value: string; disabled?: boolean; onChange: (value: string) => void; children: ReactNode }) {
+function SettingSelect({ value, disabled, onChange, children, widthClass = "w-44" }: { value: string; disabled?: boolean; onChange: (value: string) => void; children: ReactNode; widthClass?: string }) {
   return (
-    <div className="relative">
+    <div className={cn("relative", widthClass)}>
       <select
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-44 appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 [color-scheme:dark]"
+        className="h-10 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm font-medium text-foreground outline-none transition-colors hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 [color-scheme:dark]"
       >
         {children}
       </select>
@@ -565,18 +565,26 @@ function useOcrEngines() {
   return { engines, loading, refresh };
 }
 
-function ProviderCard({ title, status, message, children, cloud = false }: { title: string; status: Status; message: string; children: ReactNode; cloud?: boolean }) {
+function ProviderCard({ title, status, message, children, cloud = false, enabled, onToggle }: { title: string; status: Status; message: string; children: ReactNode; cloud?: boolean; enabled?: boolean; onToggle?: (value: boolean) => void }) {
+  const showToggle = typeof enabled === "boolean" && Boolean(onToggle);
   return (
-    <section className="rounded-xl border border-border bg-background/40 p-4">
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <section className={cn("rounded-xl border bg-background/40 p-5 transition-colors", enabled ? "border-primary/40" : "border-border")}>
+      <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <h3 className="font-medium text-foreground">{title}</h3>
           <p className="mt-1 text-xs text-muted-foreground">{cloud ? "Cloud API · key stored securely" : "Local endpoint · offline capable"}</p>
         </div>
-        <StatusBadge status={status} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={status} />
+          {showToggle && <Toggle checked={enabled!} onChange={onToggle!} label={`Enable ${title}`} />}
+        </div>
       </div>
-      <div className="space-y-4">{children}</div>
-      {message && <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><ShieldAlert className="size-3.5" />{message}</p>}
+      {showToggle && !enabled ? (
+        <p className="rounded-lg border border-dashed border-border bg-background/40 p-3 text-xs text-muted-foreground">{title} is off. Enable it to configure a model and use Chat.</p>
+      ) : (
+        <div className="space-y-5">{children}</div>
+      )}
+      {message && <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"><ShieldAlert className="size-3.5" />{message}</p>}
     </section>
   );
 }
@@ -603,10 +611,128 @@ function SettingsCard({ title, eyebrow, children }: { title: string; eyebrow: st
   );
 }
 
-function Stub({ title, text }: { title: string; text: string }) {
+function UpdatesSettings() {
+  const [version, setVersion] = useState("0.1.0");
+  const [autoCheck, setAutoCheck] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [result, setResult] = useState<"idle" | "up-to-date" | "available" | "error">("idle");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const [ver, auto] = await Promise.all([
+        getVersion().catch(() => "0.1.0"),
+        getSetting("updater.auto_check"),
+      ]);
+      if (cancelled) return;
+      setVersion(ver);
+      setAutoCheck(auto !== "0");
+      setLoaded(true);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function persistAutoCheck(next: boolean) {
+    setAutoCheck(next);
+    await setSetting("updater.auto_check", next ? "1" : "0");
+  }
+
+  async function checkNow() {
+    setChecking(true);
+    setMessage("");
+    try {
+      const found = await check();
+      if (found) {
+        setUpdate(found);
+        setResult("available");
+        setMessage(`Version ${found.version} is available.`);
+      } else {
+        setUpdate(null);
+        setResult("up-to-date");
+        setMessage("You're on the latest version.");
+      }
+    } catch (error) {
+      setResult("error");
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function installNow() {
+    if (!update) return;
+    setInstalling(true);
+    setMessage("Downloading and installing…");
+    try {
+      await invoke("prepare_for_update");
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (error) {
+      setResult("error");
+      setMessage(error instanceof Error ? error.message : String(error));
+      setInstalling(false);
+    }
+  }
+
   return (
-    <SettingsCard title={title} eyebrow="Settings">
-      <div className="rounded-lg border border-dashed border-border bg-background/35 p-6 text-sm text-muted-foreground">{text}</div>
+    <SettingsCard title="Updates" eyebrow="Stay current">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/45 p-4">
+        <div className="flex items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-lg border border-border bg-secondary/50 text-foreground">
+            <ShieldCheck className="size-5" />
+          </span>
+          <div>
+            <div className="text-sm font-medium text-foreground">PDF-Parser</div>
+            <p className="mt-0.5 font-mono text-xs text-muted-foreground">Version {version}</p>
+          </div>
+        </div>
+        <Button type="button" onClick={() => void checkNow()} disabled={checking || installing}>
+          {checking ? <Loader2 className="size-4 animate-spin" /> : <RotateCw className="size-4" />}
+          Check for updates
+        </Button>
+      </div>
+
+      {result !== "idle" && (
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 text-sm",
+            result === "available" && "border-primary/40 bg-primary/5 text-foreground",
+            result === "up-to-date" && "border-emerald-400/30 bg-emerald-400/5 text-foreground",
+            result === "error" && "border-destructive/40 bg-destructive/5 text-destructive",
+          )}
+        >
+          <div className="flex items-center gap-2">
+            {result === "available" && <DownloadCloud className="size-4 text-primary" />}
+            {result === "up-to-date" && <CheckCircle2 className="size-4 text-emerald-400" />}
+            {result === "error" && <ShieldAlert className="size-4" />}
+            <span className={result === "error" ? undefined : "text-muted-foreground"}>{message}</span>
+          </div>
+          {result === "available" && (
+            <Button type="button" onClick={() => void installNow()} disabled={installing}>
+              {installing ? <Loader2 className="size-4 animate-spin" /> : <DownloadCloud className="size-4" />}
+              {installing ? "Installing…" : "Install and restart"}
+            </Button>
+          )}
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-border">
+        <SettingRow icon={RefreshCw} title="Automatic update checks" description="Check for new signed releases on launch and every 6 hours while the app is open.">
+          <Toggle checked={autoCheck} disabled={!loaded} onChange={(next) => void persistAutoCheck(next)} label="Automatic update checks" />
+        </SettingRow>
+      </div>
+
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        <ShieldCheck className="size-3.5" />
+        Updates are downloaded from signed GitHub release artifacts and verified before they install.
+      </p>
     </SettingsCard>
   );
 }

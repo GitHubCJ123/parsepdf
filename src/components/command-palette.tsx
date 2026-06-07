@@ -88,11 +88,11 @@ export function CommandPalette() {
     >
       <Command shouldFilter>
         <CommandInput placeholder="Type a command or search…" />
-        <CommandList>
+        <CommandList className="max-h-[22rem] px-2 pb-2">
           <CommandEmpty>No matching commands.</CommandEmpty>
           {groups.map((group, groupIndex) => (
             <div key={group.heading}>
-              {groupIndex > 0 ? <CommandSeparator /> : null}
+              {groupIndex > 0 ? <CommandSeparator className="my-2" /> : null}
               <CommandGroup heading={group.heading}>
                 {group.items.map((item) => {
                   const Icon = item.icon;
@@ -102,17 +102,17 @@ export function CommandPalette() {
                       value={item.label}
                       keywords={item.keywords}
                       onSelect={item.run}
-                      className="gap-3 px-2 py-2"
+                      className="my-0.5 gap-3 rounded-lg px-2.5 py-2.5"
                     >
-                      <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border bg-background/60 text-muted-foreground group-data-selected/command-item:text-foreground">
+                      <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border bg-background/60 text-muted-foreground group-data-selected/command-item:text-foreground">
                         <Icon className="size-4" />
                       </span>
-                      <div className="flex min-w-0 flex-col">
-                        <span className="truncate font-medium">{item.label}</span>
-                        <span className="truncate text-xs text-muted-foreground">{item.hint}</span>
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="truncate font-medium leading-tight">{item.label}</span>
+                        <span className="truncate text-xs leading-tight text-muted-foreground">{item.hint}</span>
                       </div>
                       {item.shortcut ? (
-                        <CommandShortcut className="rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[11px] tracking-normal">
+                        <CommandShortcut className="ml-4 shrink-0 rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[11px] tracking-normal">
                           {item.shortcut}
                         </CommandShortcut>
                       ) : null}

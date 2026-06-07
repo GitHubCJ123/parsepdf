@@ -1,0 +1,7 @@
+# Migration SQL files are hashed by sqlx (via tauri-plugin-sql) to detect
+# changes. The hash is computed over the raw bytes, so CRLF vs LF line endings
+# produce DIFFERENT checksums for byte-identical SQL. Without this, a Windows
+# dev build (CRLF checkout) and a CI build (LF) disagree on the checksum and the
+# app fails to start with "migration N was previously applied but has been
+# modified". Pin these files to LF everywhere so every build agrees forever.
+src-tauri/migrations/*.sql text eol=lf

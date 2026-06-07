@@ -8,6 +8,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
 import { Sidebar } from "@/components/sidebar";
 import { UpdateNotifier } from "@/components/update-notifier";
+import { WindowControls } from "@/components/window-controls";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { aiHealthCheck } from "@/lib/ipc";
 import { getSetting } from "@/lib/db";
@@ -25,8 +26,11 @@ export function AppLayout() {
     <div className="app-grain flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/80 bg-background/85 px-4 backdrop-blur-xl">
-          <div className="font-mono text-sm font-medium tracking-[-0.03em] text-foreground">PDF-Parser</div>
+        <header
+          data-tauri-drag-region
+          className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/80 bg-background/85 pl-4 backdrop-blur-xl"
+        >
+          <div data-tauri-drag-region className="font-mono text-sm font-medium tracking-[-0.03em] text-foreground">PDF-Parser</div>
           <div className="flex items-center gap-2">
             <ProviderStatusIndicator />
             <Button type="button" size="sm" className="rounded-md" onClick={() => void navigate({ to: "/upload" })}>
@@ -41,10 +45,13 @@ export function AppLayout() {
               <span>Command</span>
               <kbd className="rounded-sm border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground">Ctrl K</kbd>
             </button>
+            <WindowControls />
           </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-auto p-6">
-          <Outlet />
+        <main className="min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-[1600px] p-6">
+            <Outlet />
+          </div>
         </main>
       </div>
       <CommandPalette />

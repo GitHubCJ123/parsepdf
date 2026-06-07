@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-06-06
+## [0.1.5] - 2026-06-06
 
 ### Added
 - macOS (Apple Silicon) build target and cross-platform release workflow
@@ -14,10 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reprocess a document with a chosen OCR engine from the library preview
 - Periodic rescan of watched folders with persistent de-duplication
 - New application logo and icons
+- Frameless custom title bar with integrated window controls
+- Single-instance enforcement (a second launch focuses the existing window)
+- Real Updates settings: version display, manual update check/install, and an automatic-check toggle
+
+### Changed
+- Redesigned the AI providers settings (enable toggle replaces the redundant default-provider menu)
+- Larger, more readable UI scale and sidebar navigation
+- Polished the command palette spacing and layout
 
 ### Fixed
 - Auto-updater endpoint pointed at an unset owner placeholder, so update checks never worked
 - PDF preview failed to load in the packaged app (asset-protocol CSP was missing `http://asset.localhost`)
+- Startup failure from a migration checksum mismatch caused by CRLF/LF line endings (migrations pinned to LF)
 - Settings panel could freeze when opened
 - Cross-platform path handling and OCR engine availability
 
