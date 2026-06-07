@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-06
+
+### Added
+- macOS (Apple Silicon) build target and cross-platform release workflow
+- Duplicate-upload protection using content-hash detection
+- Reprocess a document with a chosen OCR engine from the library preview
+- Periodic rescan of watched folders with persistent de-duplication
+- New application logo and icons
+
+### Fixed
+- Auto-updater endpoint pointed at an unset owner placeholder, so update checks never worked
+- PDF preview failed to load in the packaged app (asset-protocol CSP was missing `http://asset.localhost`)
+- Settings panel could freeze when opened
+- Cross-platform path handling and OCR engine availability
+
 ## [0.1.0] - 2026-05-27
 
 ### Added
