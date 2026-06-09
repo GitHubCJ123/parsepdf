@@ -8,6 +8,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, CheckCircle2, ChevronDown, Copy, DownloadCloud, ExternalLink, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, RotateCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
 import { EngineSelector } from "@/components/engine-selector";
+import { startOnboarding } from "@/components/onboarding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { aiHealthCheck, aiListModels, debugDumpState, debugResetLibrary, listOcrEngines, secretsDelete, secretsGet, secretsSet, setDefaultOcrEngine, type DebugStateDump, type EngineInfo } from "@/lib/ipc";
@@ -334,6 +335,13 @@ export function SettingsPage() {
                 <p className="mt-1 text-sm text-muted-foreground">Open app details, folders, updates, and logs.</p>
               </div>
               <Button type="button" onClick={() => setAboutOpen(true)}><Info className="size-4" />Open about</Button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background/45 p-4">
+              <div>
+                <h3 className="font-medium text-foreground">Product tour</h3>
+                <p className="mt-1 text-sm text-muted-foreground">Replay the welcome walkthrough that explains every part of the app.</p>
+              </div>
+              <Button type="button" variant="outline" onClick={() => startOnboarding()}><Sparkles className="size-4" />Replay tour</Button>
             </div>
           </SettingsCard>
         )}

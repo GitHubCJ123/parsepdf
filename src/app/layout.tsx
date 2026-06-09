@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "@/components/command-palette";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
+import { Onboarding } from "@/components/onboarding";
 import { Sidebar } from "@/components/sidebar";
 import { UpdateNotifier } from "@/components/update-notifier";
 import { WindowControls } from "@/components/window-controls";
@@ -57,6 +58,7 @@ export function AppLayout() {
       <CommandPalette />
       <KeyboardShortcutsDialog open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
       <UpdateNotifier />
+      <Onboarding />
       <Toaster position="bottom-right" richColors closeButton duration={3000} toastOptions={{ className: "border-border bg-popover text-popover-foreground" }} />
     </div>
   );
