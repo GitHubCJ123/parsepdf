@@ -1,10 +1,11 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { CheckCircle2, ChevronDown, Copy, DownloadCloud, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, RotateCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Check, CheckCircle2, ChevronDown, Copy, DownloadCloud, ExternalLink, FolderOpen, Info, Layers, Loader2, PlugZap, RefreshCw, RotateCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { AboutDialog } from "@/components/about-dialog";
 import { EngineSelector } from "@/components/engine-selector";
 import { Button } from "@/components/ui/button";
@@ -15,9 +16,27 @@ import { notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
+const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
+const OLLAMA_LIBRARY_URL = "https://ollama.com/library";
+
+// Models suggested in the setup guide, ordered smallest -> largest so the table
+// reads as a clear "lighter vs. heavier" tradeoff. Guidance is derived from
+// parameter size (smaller = faster + less memory); RAM figures are rough
+// estimates at Ollama's default quantization, not exact measurements.
+type RecommendedModel = { tag: string; params: string; ram: string; note: string; recommended?: boolean };
+const RECOMMENDED_MODELS: RecommendedModel[] = [
+  { tag: "gemma4:2b", params: "2B", ram: "~2 GB", note: "Fastest. Runs on almost any laptop." },
+  { tag: "qwen3.5:2b", params: "2B", ram: "~2 GB", note: "Lightweight and snappy on low-RAM machines." },
+  { tag: "gemma4:4b", params: "4B", ram: "~3–4 GB", note: "Strong all-rounder; still light on resources." },
+  { tag: "qwen3.5:4b", params: "4B", ram: "~3–4 GB", note: "Best balance of quality and speed.", recommended: true },
+  { tag: "qwen3.6:27b", params: "27B", ram: "~18 GB", note: "Highest quality. Needs a strong GPU or lots of RAM." },
+];
+const RECOMMENDED_DEFAULT_MODEL = "qwen3.5:4b";
 
 type Provider = "none" | "ollama";
 type Status = "idle" | "testing" | "connected" | "not-configured" | "error";
+// "unknown" until the first probe finishes; drives whether the setup guide is shown.
+type OllamaDetection = "unknown" | "not-running" | "running-no-models" | "ready";
 
 export function SettingsPage() {
   const { engines, refresh: refreshEngines, loading: enginesLoading } = useOcrEngines();
@@ -29,6 +48,7 @@ export function SettingsPage() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaStatus, setOllamaStatus] = useState<Status>("idle");
   const [ollamaMessage, setOllamaMessage] = useState("");
+  const [ollamaDetection, setOllamaDetection] = useState<OllamaDetection>("unknown");
   const [settingsMessage, setSettingsMessage] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
 
@@ -96,42 +116,56 @@ export function SettingsPage() {
   async function testOllama() {
     await saveOllama();
     try {
-      const [ok, models] = await Promise.all([aiHealthCheck("ollama"), aiListModels("ollama").catch((): string[] => [])]);
+      const [healthResult, modelsResult] = await Promise.allSettled([aiHealthCheck("ollama"), aiListModels("ollama")]);
+      const ok = healthResult.status === "fulfilled" && healthResult.value;
+      const reachable = modelsResult.status === "fulfilled";
+      const models = modelsResult.status === "fulfilled" ? modelsResult.value : [];
       setOllamaModels(models);
+      setOllamaDetection(!reachable ? "not-running" : models.length > 0 ? "ready" : "running-no-models");
       if (models.length > 0 && !models.includes(ollamaModel)) {
         setOllamaModel(models[0]);
         await setSetting("ollama.model", models[0]);
       }
       setOllamaStatus(ok ? "connected" : "not-configured");
-      setOllamaMessage(ok ? `Connected${models.length ? ` · ${models.length} model${models.length === 1 ? "" : "s"}` : ""}.` : "Ollama is not reachable on this URL.");
+      setOllamaMessage(
+        ok
+          ? `Connected${models.length ? ` · ${models.length} model${models.length === 1 ? "" : "s"}` : ""}.`
+          : !reachable
+            ? "Couldn't reach Ollama — follow the setup steps above to install it."
+            : "Ollama is running but has no models yet. Download one to continue.",
+      );
     } catch (error) {
       setOllamaStatus("error");
       setOllamaMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
-  // Auto-discover Ollama models whenever the AI tab is opened or the base URL changes.
-  // Failures are silent (Ollama may simply not be running); the user can still type a model name.
+  // Detect whether a local Ollama server is reachable and how many models it has.
+  // Listing succeeds with models -> ready; succeeds empty -> running but no models;
+  // throws -> server unreachable (Ollama not installed or not running). The result
+  // drives the model picker and whether the step-by-step setup guide is shown.
+  const detectOllama = useCallback(async () => {
+    try {
+      const models = await aiListModels("ollama");
+      setOllamaModels(models);
+      setOllamaDetection(models.length > 0 ? "ready" : "running-no-models");
+      setOllamaModel((current) => {
+        if (models.length > 0 && !models.includes(current)) {
+          void setSetting("ollama.model", models[0]);
+          return models[0];
+        }
+        return current;
+      });
+    } catch {
+      setOllamaDetection("not-running");
+    }
+  }, []);
+
+  // Re-run detection whenever the AI tab is opened or the base URL changes.
   useEffect(() => {
     if (activeSection !== "ai") return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const models = await aiListModels("ollama");
-        if (cancelled) return;
-        setOllamaModels(models);
-        if (models.length > 0 && !models.includes(ollamaModel)) {
-          setOllamaModel(models[0]);
-          await setSetting("ollama.model", models[0]);
-        }
-      } catch {
-        // Ignored: silent failure (e.g. Ollama not running). User still has manual input.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSection, ollamaBaseUrl]);
+    void detectOllama();
+  }, [activeSection, ollamaBaseUrl, detectOllama]);
 
   const sections = useMemo(
     () => [
@@ -248,6 +282,10 @@ export function SettingsPage() {
               </p>
             </div>
 
+            {(ollamaDetection === "not-running" || ollamaDetection === "running-no-models") && (
+              <OllamaSetupGuide detection={ollamaDetection} onRecheck={detectOllama} />
+            )}
+
             <ProviderCard
               title="Ollama"
               status={ollamaStatus}
@@ -269,9 +307,9 @@ export function SettingsPage() {
                   <>
                     <Input className="h-10" list="ollama-models" value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} placeholder="No installed models detected" />
                     <datalist id="ollama-models">
-                      {[...new Set(["llama3.1", ...ollamaModels])].map((model) => <option key={model} value={model} />)}
+                      {[...new Set([...RECOMMENDED_MODELS.map((model) => model.tag), ...ollamaModels])].map((model) => <option key={model} value={model} />)}
                     </datalist>
-                    <p className="text-xs leading-5 text-muted-foreground">Run an Ollama model first (e.g. <code className="rounded bg-secondary px-1 py-0.5 font-mono">ollama pull llama3.1</code>) then test the connection.</p>
+                    <p className="text-xs leading-5 text-muted-foreground">Run an Ollama model first (e.g. <code className="rounded bg-secondary px-1 py-0.5 font-mono">ollama pull {RECOMMENDED_DEFAULT_MODEL}</code>) then test the connection.</p>
                   </>
                 )}
               </label>
@@ -565,6 +603,188 @@ function useOcrEngines() {
   return { engines, loading, refresh };
 }
 
+function OllamaSetupGuide({ detection, onRecheck }: { detection: "not-running" | "running-no-models"; onRecheck: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const notInstalled = detection === "not-running";
+
+  async function recheck() {
+    setBusy(true);
+    try {
+      await onRecheck();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const recheckButton = (
+    <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void recheck()} disabled={busy}>
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+      Re-check
+    </Button>
+  );
+
+  const modelStep = (n: number) => (
+    <GuideStep n={n} title="Download a model">
+      <p>
+        Pick one based on your computer, then paste its command into a terminal
+        (<span className="font-medium text-foreground">PowerShell</span> on Windows,{" "}
+        <span className="font-medium text-foreground">Terminal</span> on macOS or Linux) and press Enter:
+      </p>
+      <ModelComparison />
+      <p className="text-[11px] text-muted-foreground">
+        Each model downloads once and is reused afterwards. Not sure?{" "}
+        <span className="font-medium text-foreground">{RECOMMENDED_DEFAULT_MODEL}</span> is a great starting point. Browse more in the{" "}
+        <button type="button" onClick={() => void openUrl(OLLAMA_LIBRARY_URL)} className="underline underline-offset-2 transition-colors hover:text-foreground">
+          model library
+        </button>
+        .
+      </p>
+    </GuideStep>
+  );
+
+  return (
+    <section className="space-y-4 rounded-xl border border-amber-400/30 bg-amber-400/[0.04] p-5">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-amber-400/30 bg-amber-400/10 text-amber-300">
+          <DownloadCloud className="size-4" />
+        </span>
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold text-foreground">
+            {notInstalled ? "Ollama isn't set up yet — here's how" : "Almost there — add a model to Ollama"}
+          </h3>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {notInstalled
+              ? "Ollama is a free app that runs AI models privately on your own computer. Do this once and PDF-Parser connects automatically."
+              : "Ollama is installed and running, but it has no models yet. Download one to start using Chat."}
+          </p>
+        </div>
+      </div>
+
+      {notInstalled && (
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-background/50 p-3">
+          <PlugZap className="mt-0.5 size-4 shrink-0 text-amber-300" />
+          <div className="space-y-1 text-xs leading-5 text-muted-foreground">
+            <p className="font-medium text-foreground">Already installed Ollama?</p>
+            <p>
+              It may simply be closed. Open the <span className="font-medium text-foreground">Ollama</span> app from your Start menu (Windows) or Applications folder (macOS) — a llama icon appears in your system tray or menu bar once it's running — then re-check.
+            </p>
+            {recheckButton}
+          </div>
+        </div>
+      )}
+
+      <ol className="space-y-3">
+        {notInstalled ? (
+          <>
+            <GuideStep n={1} title="Download Ollama">
+              <p>Open the official download page and grab the installer for your operating system.</p>
+              <Button type="button" size="sm" className="mt-2" onClick={() => void openUrl(OLLAMA_DOWNLOAD_URL)}>
+                <DownloadCloud className="size-3.5" />
+                Download Ollama
+                <ExternalLink className="size-3" />
+              </Button>
+            </GuideStep>
+            <GuideStep n={2} title="Run the installer">
+              <p>Open the file you just downloaded and follow the prompts. When it finishes, Ollama starts on its own and keeps running quietly in the background.</p>
+            </GuideStep>
+            <GuideStep n={3} title="Make sure Ollama is open">
+              <p>
+                Ollama has to be running for PDF-Parser to reach it. Look for the llama icon in your system tray (Windows) or menu bar (macOS). If it isn't there, open <span className="font-medium text-foreground">Ollama</span> from your Start menu or Applications folder.
+              </p>
+            </GuideStep>
+            {modelStep(4)}
+            <GuideStep n={5} title="Connect">
+              <p>Come back to this screen and re-check. PDF-Parser finds Ollama automatically once it's running with a model installed.</p>
+              {recheckButton}
+            </GuideStep>
+          </>
+        ) : (
+          <>
+            {modelStep(1)}
+            <GuideStep n={2} title="Connect">
+              <p>When the download finishes, re-check and pick your model below.</p>
+              {recheckButton}
+            </GuideStep>
+          </>
+        )}
+      </ol>
+    </section>
+  );
+}
+
+function GuideStep({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border border-border bg-background text-xs font-semibold text-foreground">{n}</span>
+      <div className="space-y-1 text-xs leading-5 text-muted-foreground">
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        {children}
+      </div>
+    </li>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be denied; the command stays visible for manual copy.
+    }
+  }
+
+  return (
+    <Button type="button" variant="ghost" size="icon-sm" aria-label={copied ? "Copied" : label} onClick={() => void copy()}>
+      {copied ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+    </Button>
+  );
+}
+
+function ModelComparison() {
+  return (
+    <div className="my-2 overflow-hidden rounded-lg border border-border">
+      <table className="w-full border-collapse text-left text-xs">
+        <thead>
+          <tr className="bg-background/60 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            <th className="px-3 py-2 font-medium">Model</th>
+            <th className="px-3 py-2 font-medium">Size</th>
+            <th className="hidden px-3 py-2 font-medium sm:table-cell">RAM*</th>
+            <th className="px-3 py-2 font-medium">Best for</th>
+            <th className="px-3 py-2"><span className="sr-only">Copy command</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {RECOMMENDED_MODELS.map((model) => (
+            <tr key={model.tag} className="border-t border-border/70 align-top">
+              <td className="px-3 py-2">
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <code className="font-mono text-foreground">{model.tag}</code>
+                  {model.recommended && (
+                    <span className="rounded-full border border-emerald-400/30 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-emerald-300">Recommended</span>
+                  )}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-muted-foreground">{model.params}</td>
+              <td className="hidden px-3 py-2 text-muted-foreground sm:table-cell">{model.ram}</td>
+              <td className="px-3 py-2 text-muted-foreground">{model.note}</td>
+              <td className="px-3 py-2 text-right">
+                <CopyButton text={`ollama pull ${model.tag}`} label={`Copy install command for ${model.tag}`} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="border-t border-border/70 bg-background/40 px-3 py-1.5 text-[10px] leading-4 text-muted-foreground">
+        * Approximate memory at default quantization. Tap the copy icon, then paste the command into your terminal.
+      </p>
+    </div>
+  );
+}
+
 function ProviderCard({ title, status, message, children, cloud = false, enabled, onToggle }: { title: string; status: Status; message: string; children: ReactNode; cloud?: boolean; enabled?: boolean; onToggle?: (value: boolean) => void }) {
   const showToggle = typeof enabled === "boolean" && Boolean(onToggle);
   return (
@@ -724,7 +944,7 @@ function UpdatesSettings() {
       )}
 
       <div className="overflow-hidden rounded-xl border border-border">
-        <SettingRow icon={RefreshCw} title="Automatic update checks" description="Check for new signed releases on launch and every 6 hours while the app is open.">
+        <SettingRow icon={RefreshCw} title="Automatic update checks" description="Check for new signed releases on launch and every 30 minutes while the app is open.">
           <Toggle checked={autoCheck} disabled={!loaded} onChange={(next) => void persistAutoCheck(next)} label="Automatic update checks" />
         </SettingRow>
       </div>

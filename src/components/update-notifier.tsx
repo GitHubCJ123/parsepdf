@@ -29,7 +29,7 @@ type UpdatePromptProps = {
   onLater: () => void;
 };
 
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 function formatReleaseDate(date?: string) {
   if (!date) {
