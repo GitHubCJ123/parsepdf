@@ -57,7 +57,7 @@ ndarray = { version = "0.17", optional = true }
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "tracing", "api-24"] }
 tauri-plugin-stronghold = "2"
 argon2 = "0.5"
-rand = "0.8"
+rand = "0.9"
 regex = "1"
 notify = "6"
 notify-debouncer-full = "0.3"
