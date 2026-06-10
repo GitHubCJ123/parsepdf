@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
+// Bundle Sonner's stylesheet through Vite instead of its runtime <style> injection,
+// which the production Tauri CSP blocks — without it, toasts lose their fixed
+// positioning and fall back to the top of the page in release builds.
+import "sonner/dist/styles.css";
 import "./styles/globals.css";
 import { ErrorBoundary } from "./components/error-boundary";
 import { getDatabase } from "./lib/db";

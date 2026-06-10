@@ -10,6 +10,7 @@ import {
   DownloadCloud,
   ExternalLink,
   FolderOpen,
+  Info,
   Library,
   MessageSquareText,
   ScanText,
@@ -111,6 +112,10 @@ export function OnboardingDialog({ open, onFinish }: OnboardingDialogProps) {
             <PlaceCard icon={MessageSquareText} title="Chat" text="Ask questions about your documents and get cited answers (needs AI)." />
             <PlaceCard icon={Settings} title="Settings" text="Configure OCR engines, AI, library behavior, and updates." />
           </div>
+          <p className="flex items-center gap-2 rounded-lg border border-border bg-background/40 p-3 text-xs leading-5 text-muted-foreground">
+            <Info className="size-3.5 shrink-0" />
+            Heads up: folders are watched only while PDF-Parser is open. Background watching when the app is closed is coming soon.
+          </p>
         </div>
       ),
     },

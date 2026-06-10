@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, ArrowRight, CheckCircle2, Clock3, FolderPlus, Loader2, RefreshCw, Save, Timer, Trash2, UploadCloud, XCircle } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, Clock3, FolderPlus, Info, Loader2, RefreshCw, Save, Timer, Trash2, UploadCloud, XCircle } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -139,6 +139,10 @@ function FoldersHero({ onAdd }: { onAdd: () => void }) {
               <UploadCloud className="size-4" /> Upload manually
             </Link>
           </div>
+          <p className="flex items-center gap-1.5 text-xs leading-5 text-muted-foreground">
+            <Info className="size-3.5 shrink-0" />
+            Folders are watched only while PDF-Parser is open. Background watching (when the app is closed) is coming soon.
+          </p>
         </div>
         <ol className="grid gap-3 rounded-xl border border-dashed border-border bg-background/35 p-5">
           <HeroStep n={1} title="Watch a folder" body="Pick any folder — a scanner&apos;s output, a synced drive, or a downloads folder." />
